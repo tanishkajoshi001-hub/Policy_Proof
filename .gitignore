@@ -27,6 +27,10 @@ Thumbs.db
 *.sln
 *.sw?
 
+# Local AI agent skills (keep untracked)
+.agent/
+.agents/
+
 # Local workspace artifacts not part of RehabBuddy source
 Oakhaven_build/
 Oakhaven_build.zip
