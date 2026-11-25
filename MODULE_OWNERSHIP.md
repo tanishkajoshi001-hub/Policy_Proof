@@ -56,7 +56,33 @@ Existing Mission 01 working code is preserved intact and assigned to **Person 3*
 
 ---
 
-## 3. Non-Goals & Handoff Sequence
+## 3. CODEOWNERS Placeholder Replacement Requirement
+
+> [!IMPORTANT]
+> [`.github/CODEOWNERS`](.github/CODEOWNERS) currently uses placeholder handles (`@startup-owner`, `@person3-motion`, `@person4-patient`, `@person2-backend-release`). Repository administrators **must replace these placeholder handles with actual GitHub usernames** (or GitHub team slugs) before enabling branch protection and required CODEOWNERS reviews on `main` or `foundation/startup`.
+
+---
+
+## 4. Disclosed Pre-Existing Lint Warnings & Owner Assignment
+
+To preserve working Mission 01 code without unapproved specialist edits during the 20% startup stage, the following **8 pre-existing ESLint warnings** (`0` errors) are intentionally preserved and assigned to their owners:
+
+| File & Line | Rule | Assigned Owner |
+|:---|:---|:---|
+| `src/features/camera/hooks/useCamera.ts:81` | `@typescript-eslint/no-explicit-any` | **Person 3** (`feature/motion-engine`) |
+| `src/features/camera/services/cameraService.ts:74` | `@typescript-eslint/no-explicit-any` | **Person 3** (`feature/motion-engine`) |
+| `src/features/camera/services/cameraService.ts:106` | `@typescript-eslint/no-explicit-any` | **Person 3** (`feature/motion-engine`) |
+| `src/features/pose/components/PoseCameraView.tsx:68` | `@typescript-eslint/no-explicit-any` | **Person 3** (`feature/motion-engine`) |
+| `src/features/pose/services/poseService.ts:264` | `no-useless-assignment` | **Person 3** (`feature/motion-engine`) |
+| `src/test/cameraService.test.ts:47` | `@typescript-eslint/no-explicit-any` | **Person 3** (`feature/motion-engine`) |
+| `src/test/poseService.test.ts:69` | `@typescript-eslint/no-explicit-any` | **Person 3** (`feature/motion-engine`) |
+| `src/test/setup.ts:9` | `@typescript-eslint/no-explicit-any` | **Startup / Shared Test Setup** *(for Person 2 at final integration)* |
+
+All startup-owned modules (`src/app/**`, `src/shared/**`) have **0 errors and 0 warnings**.
+
+---
+
+## 5. Non-Goals & Handoff Sequence
 
 1. **Startup Owner** completes the 20% foundation, verifies baseline checks, commits on `foundation/startup`, and **stops**.
 2. **Person 3** and **Person 4** branch from `foundation/startup` (or `main` once merged) and build independently in parallel using provisional contracts (`v0.1`), validating contract definitions with each other before freezing.
