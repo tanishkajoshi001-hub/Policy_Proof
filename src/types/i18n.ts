@@ -1,0 +1,41 @@
+export type Language = 'en' | 'hi';
+
+export interface LocalizedStrings {
+  appName: string;
+  tagline: string;
+  targetRegionBadge: string;
+  privacyBadge: string;
+  privacyDetail: string;
+  medicalDisclaimerTitle: string;
+  medicalDisclaimerBody: string;
+  startCamera: string;
+  stopCamera: string;
+  restartCamera: string;
+  switchCamera: string;
+  cameraReady: string;
+  cameraOff: string;
+  requestingPermission: string;
+  permissionDeniedTitle: string;
+  permissionDeniedMsg: string;
+  cameraNotFoundTitle: string;
+  cameraNotFoundMsg: string;
+  genericErrorTitle: string;
+  genericErrorMsg: string;
+  retryButton: string;
+  setupGuideTitle: string;
+  checklistDistanceTitle: string;
+  checklistDistanceDesc: string;
+  checklistLightingTitle: string;
+  checklistLightingDesc: string;
+  checklistStabilityTitle: string;
+  checklistStabilityDesc: string;
+  statusIdle: string;
+  statusNoPerson: string;
+  statusPartiallyVisible: string;
+  statusLowConfidence: string;
+  statusTrackingStable: string;
+  fpsLabel: string;
+  latencyLabel: string;
+  cameraSelectorLabel: string;
+  mirrorToggle: string;
+}

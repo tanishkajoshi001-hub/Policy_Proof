@@ -1,0 +1,34 @@
+:root {
+  /* Surfaces */
+  --rb-surface-canvas: #090d16;
+  --rb-surface-primary: #0f172a;
+  --rb-surface-elevated: #151f32;
+  --rb-surface-muted: #1e293b;
+
+  /* Typography */
+  --rb-text-primary: #f8fafc;
+  --rb-text-secondary: #cbd5e1;
+  --rb-text-muted: #94a3b8;
+  --rb-text-inverse: #090d16;
+
+  /* Borders */
+  --rb-border-subtle: #1e293b;
+  --rb-border-strong: #334155;
+
+  /* Semantic Status & Accent */
+  --rb-accent: #14b8a6;
+  --rb-accent-hover: #2dd4bf;
+  --rb-accent-soft: rgba(20, 184, 166, 0.14);
+
+  --rb-success: #10b981;
+  --rb-success-soft: rgba(16, 185, 129, 0.14);
+
+  --rb-warning: #f59e0b;
+  --rb-warning-soft: rgba(245, 158, 11, 0.14);
+
+  --rb-danger: #ef4444;
+  --rb-danger-soft: rgba(239, 68, 68, 0.16);
+
+  /* Focus Ring */
+  --rb-focus-ring: #2dd4bf;
+}
