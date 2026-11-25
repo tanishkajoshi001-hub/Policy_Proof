@@ -1,0 +1,37 @@
+name: RehabBuddy Baseline CI
+
+on:
+  push:
+    branches: [main, foundation/startup, 'feature/**']
+  pull_request:
+    branches: [main, foundation/startup]
+
+jobs:
+  quality-checks:
+    name: Lint, Typecheck, Unit Tests & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run TypeScript strict typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests (Vitest)
+        run: npm run test
+
+      - name: Run production build
+        run: npm run build

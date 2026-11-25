@@ -1,125 +1,64 @@
 # RehabBuddy (`Rehab_Buddy`)
 
 > **AI Home Rehab Coach for Fracture Recovery**  
-> *A browser-based AI physiotherapy assistant that watches patients do prescribed recovery exercises through the camera, corrects form in real time, counts valid reps, and shares recovery progress with doctors.*
+> *A browser-based AI physiotherapy assistant that watches patients do prescribed recovery exercises through the camera, guides posture in real time on-device, and tracks recovery progress.*
 
 ---
 
-## 🚀 Mission 01: Foundation & Real-Time Pose Detection (Completed)
+## Current Repository Stage
 
-This repository houses the production foundation for RehabBuddy, implemented with strict medical safety, offline capability, and accessibility standards.
-
-### ✨ Key Capabilities Delivered
-1. **On-Device Computer Vision Engine**:
-   - MediaPipe Tasks Vision `PoseLandmarker` running 100% in-browser via WebAssembly / WebGL.
-   - **Local Model Assets**: Local `pose_landmarker_lite.task` and local WASM binaries in `public/` (zero external CDN runtime dependency).
-   - **Privacy Guarantee**: Raw camera frames **never** leave the client device or get uploaded.
-2. **Robust Browser Camera Lifecycle**:
-   - Explicit state machine: `idle` $\rightarrow$ `requesting-permission` $\rightarrow$ `initializing` $\rightarrow$ `active` $\rightarrow$ `permission-denied` | `camera-unavailable` | `error`.
-   - Explicit user-triggered permission (no unsolicited camera activations).
-   - Multi-device selection & selfie mirror mode support.
-   - Complete stream and animation frame teardown on unmount.
-3. **Biomechanical Pose Tracking & Visualization**:
-   - 33 landmarks with clinical visibility thresholds ($\ge 0.65$ confidence).
-   - Tracking states: `no-person` | `partially-visible` | `low-confidence` | `tracking-stable`.
-   - Real-time HTML5 Canvas 2D skeleton overlay with coordinate mapping matching aspect ratio and mirrored orientation.
-   - Neutral clinical styling (Medical cyan/sky blue) — distinct from future rep evaluation colors.
-4. **Accessible, Multilingual Healthcare Experience**:
-   - Bilingual support: **English** and **Hindi (हिंदी)** with instant toggle.
-   - Large touch targets ($\ge 48$px) tailored for elderly patients (e.g. Ramesh).
-   - Clear environmental checklist (Distance, Lighting, Stability) and medical advisory notice.
-   - Live performance telemetry: Real FPS and inference latency (ms).
+This repository contains:
+1. **Verified Mission 01 Camera & Pose Foundation** (`src/features/camera/**`, `src/features/pose/**`) using local MediaPipe PoseLandmarker (`@mediapipe/tasks-vision`) assets (`public/models/` & `public/wasm/`).
+2. **Startup Foundation & Initial Handoff (First 20%)** (`foundation/startup`): Application shell, route slots (`/`, `/tracking`, `/patient` reserved, `/doctor` reserved), `v0.1` provisional shared contracts (`src/shared/contracts/`), semantic design tokens, reusable accessible UI primitives, ESLint + strict TypeScript + CI, and ownership documentation.
 
 ---
 
-## 🛠️ Tech Stack
+## Prerequisites
 
-- **Framework**: React 19 + TypeScript (Strict Mode) + Vite 6
-- **Styling**: Tailwind CSS (Medical Slate / Teal Palette)
-- **Icons**: Lucide React
-- **Pose Detection**: `@mediapipe/tasks-vision` (WASM + GPU delegate with CPU fallback)
-- **Testing**: Vitest + React Testing Library + Playwright E2E
+- **Node.js**: v22+ (tested with v24.14.1)
+- **npm**: v10+ (single package manager with committed `package-lock.json`)
+- **Browser**: Modern Chromium/Edge/Firefox/Safari with webcam access for local pose testing
 
 ---
 
-## 📂 Project Architecture
+## Setup & Development Commands
 
-```
-Rehab_Buddy/
-├── e2e/
-│   ├── camera-pose.spec.ts         # Playwright E2E browser tests
-│   └── screenshots/                # Visual verification captures (desktop & mobile)
-├── public/
-│   ├── models/
-│   │   └── pose_landmarker_lite.task # Local 5.7MB MediaPipe model
-│   └── wasm/                       # Local MediaPipe vision WASM binaries
-├── src/
-│   ├── app/
-│   │   └── App.tsx                 # Main application shell
-│   ├── components/
-│   │   ├── layout/Header.tsx       # Brand & language switcher
-│   │   └── ui/
-│   │       ├── SetupChecklist.tsx  # Distance, lighting & stability guide
-│   │       ├── PrivacyBanner.tsx   # On-device privacy guarantee
-│   │       └── ErrorAlert.tsx      # Permission & hardware error handling
-│   ├── features/
-│   │   ├── camera/
-│   │   │   ├── components/CameraControls.tsx # Start/Stop, camera switch, mirror
-│   │   │   ├── hooks/useCamera.ts  # Explicit state hook
-│   │   │   └── services/cameraService.ts     # MediaStream lifecycle
-│   │   └── pose/
-│   │       ├── components/PoseCameraView.tsx # Video + Canvas RAF loop
-│   │       ├── services/poseService.ts       # MediaPipe inference & joint checks
-│   │       └── utils/skeletonDrawer.ts       # 2D Canvas rendering
-│   ├── locales/
-│   │   ├── en.ts                   # English translations
-│   │   └── hi.ts                   # Hindi translations (Devanagari)
-│   ├── test/                       # Vitest unit test suites
-│   ├── types/                      # TypeScript schemas (camera, pose, i18n)
-│   └── main.tsx
-├── package.json
-├── playwright.config.ts
-├── tailwind.config.js
-├── tsconfig.json
-└── vite.config.ts
-```
+```bash
+# 1. Install dependencies reproducibly from package-lock.json
+npm ci
 
----
+# 2. Optional: copy public environment template
+cp .env.example .env.local
 
-## ⚡ Quickstart & Development
-
-### 1. Installation
-```powershell
-npm install
-```
-
-### 2. Run Development Server
-```powershell
+# 3. Start local development server (http://localhost:3000)
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### 3. Run Unit Tests (Vitest)
-```powershell
-npm run test
-```
+### Quality, Testing & Build Commands
 
-### 4. Run Playwright E2E Browser Tests
-```powershell
-npm run test:e2e
-```
-
-### 5. Production Build
-```powershell
-npm run build
-```
-Build outputs are written to `dist/`. To preview the production bundle:
-```powershell
-npm run preview
-```
+| Command | Purpose |
+|:---|:---|
+| `npm run lint` | Run ESLint across `src/**/*.{ts,tsx}` |
+| `npm run typecheck` | Run TypeScript strict check (`tsc --noEmit`) |
+| `npm run test` | Run Vitest unit & shell component tests |
+| `npm run test:e2e` | Run Playwright headless browser tests (desktop & mobile viewports with synthetic camera stream) |
+| `npm run build` | Run `tsc && vite build` to produce `dist/` |
+| `npm run preview` | Preview the production `dist/` bundle locally |
 
 ---
 
-## 🛡️ Medical Safety & Privacy Notice
-- **Privacy**: All video inference is performed 100% on the local device. No video frames, images, or audio are ever recorded or transmitted over the network.
-- **Clinical Advisory**: RehabBuddy is an assistive rehabilitation aid and does not provide autonomous clinical diagnoses. All rehabilitation programs must be prescribed and monitored by a licensed medical practitioner.
+## Documentation Index
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Stack, module map, dependency direction, routing, and contracts.
+- **[MODULE_OWNERSHIP.md](MODULE_OWNERSHIP.md)** — Four-owner boundaries, branches, and exact Person 3 takeover file list.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Branch workflow, PR checklist, and local hardware camera verification procedure.
+- **[docs/contracts/README.md](docs/contracts/README.md)** — Canonical `v0.1` provisional contracts and change process.
+- **[docs/PRD_SUMMARY.md](docs/PRD_SUMMARY.md)** — Product requirements synthesis.
+- **[docs/EXERCISES_SPEC.md](docs/EXERCISES_SPEC.md)** — Biomechanics & exercise config reference.
+
+---
+
+## Privacy & Medical Disclaimer
+
+- **Privacy**: Camera streams (`audio: false`) and MediaPipe pose inference run locally in the browser using local WASM and model files. No raw camera frames are uploaded or recorded.
+- **Medical Advisory**: RehabBuddy is a rehabilitation support tool and does not diagnose, treat, or replace professional medical advice. Exercise plans must be approved by a qualified doctor or physiotherapist.

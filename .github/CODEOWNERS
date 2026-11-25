@@ -1,0 +1,35 @@
+# RehabBuddy Path Ownership Matrix
+# Note: Replace placeholder handles with team GitHub usernames before enabling branch protection rules.
+
+# Startup / Foundation Owner (First 20%)
+/src/app/                   @startup-owner
+/src/shared/ui/             @startup-owner
+/src/shared/design-tokens/  @startup-owner
+/src/shared/contracts/      @startup-owner
+/package.json               @startup-owner
+/package-lock.json          @startup-owner
+/tsconfig.json              @startup-owner
+/eslint.config.js           @startup-owner
+/.github/                   @startup-owner
+/MODULE_OWNERSHIP.md        @startup-owner
+/CONTRIBUTING.md            @startup-owner
+
+# Person 3 — Motion Engine (Middle 30%)
+/src/features/camera/         @person3-motion
+/src/features/pose/           @person3-motion
+/src/features/rehab-tracking/ @person3-motion
+/src/types/camera.ts          @person3-motion
+/src/types/pose.ts            @person3-motion
+/public/models/               @person3-motion
+/public/wasm/                 @person3-motion
+
+# Person 4 — Patient Experience (Middle 30%)
+/src/features/patient/        @person4-patient
+/src/features/progress/       @person4-patient
+/src/features/i18n/           @person4-patient
+
+# Person 2 — Backend, Doctor Workspace & Final Release (Final 20%)
+/src/features/doctor/         @person2-backend-release
+/src/shared/adapters/         @person2-backend-release
+/supabase/                    @person2-backend-release
+/src/tests/                   @person2-backend-release
