@@ -98,7 +98,7 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
     await page.waitForTimeout(1500);
 
     await expect(page.getByTestId('pose-telemetry')).toContainText('CPU');
-    await expect(page.getByTestId('tracking-status')).toContainText('No Person Detected');
+    await expect(page.getByTestId('feedback-code-badge')).toContainText('PERSON_NOT_VISIBLE');
 
     expect(externalRequests).toEqual([]);
     expect(nonGetRequests).toEqual([]);
@@ -107,5 +107,33 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
 
     await page.getByRole('button', { name: 'Stop Camera' }).click();
     await expect(page.getByRole('button', { name: 'Start Camera' })).toBeVisible();
+  });
+
+  test('Motion Workbench route & offline Demo Simulation Sandbox', async ({ page }) => {
+    // Block all external network calls to verify 100% offline/local behavior
+    await page.route('**/*', (route) => {
+      const url = route.request().url();
+      if (url.startsWith('http://localhost:4173') || url.startsWith('data:') || url.startsWith('blob:')) {
+        return route.continue();
+      }
+      return route.abort();
+    });
+
+    await page.goto('/workbench');
+    await expect(page.getByText('Motion Intelligence Workbench')).toBeVisible();
+    await expect(page.getByText('Elbow Flexion-Extension (Rep)')).toBeVisible();
+
+    // Activate Simulation Sandbox (explicitly labeled DEMO / MOCK)
+    await page.getByRole('button', { name: /Enable Angle Simulator/i }).click();
+    await expect(page.getByText('DEMO / MOCK • Offline Test Mode')).toBeVisible();
+
+    // Inject Start (160°) -> Target (60°) -> wait dwell -> Target (60°) -> Start (160°) to verify rep increment
+    await page.getByRole('button', { name: 'Start (160°)' }).click();
+    await page.getByRole('button', { name: 'Target (60°)' }).click();
+    await page.waitForTimeout(260);
+    await page.getByRole('button', { name: 'Target (60°)' }).click();
+    await page.getByRole('button', { name: 'Start (160°)' }).click();
+
+    await expect(page.getByTestId('workbench-rep-count')).toContainText('1 / 10');
   });
 });

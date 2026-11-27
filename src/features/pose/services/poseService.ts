@@ -1,14 +1,43 @@
+/**
+ * @fileoverview MediaPipe PoseLandmarker Integration Service.
+ *
+ * License & Attribution:
+ * - Library: @mediapipe/tasks-vision (pinned version: 0.10.35)
+ * - License: Apache License 2.0 (Google LLC)
+ * - Model: pose_landmarker_lite.task (Apache 2.0)
+ * - Binaries: WebAssembly runtime in /public/wasm/ (Apache 2.0)
+ *
+ * Core Biomechanical Guarantees:
+ * 1. 100% on-device WebAssembly/WebGL inference processing live camera frames.
+ * 2. Zero fake or simulated landmarks in production tracking.
+ * 3. Extracts and maps both left and right sides of Shoulder, Elbow, Wrist, Hip, Knee, and Ankle joints.
+ * 4. Strictly validates landmark visibility/confidence against the 0.65 threshold.
+ *    If the elbow or wrist cannot be detected reliably, returns 'insufficient_data',
+ *    NEVER an incorrect posture result.
+ */
+
 import { FilesetResolver, PoseLandmarker, PoseLandmarkerResult } from '@mediapipe/tasks-vision';
-import { NormalizedLandmark, TrackingStatus, KeyJointCheck, POSE_LANDMARKS } from '../../../types/pose';
+import {
+  NormalizedLandmark,
+  TrackingStatus,
+  KeyJointCheck,
+  POSE_LANDMARKS,
+  MappedRehabilitationJoints,
+  RehabilitationJoint,
+  ArmReliabilityCheck,
+  CLINICAL_VISIBILITY_THRESHOLD,
+} from '../../../types/pose';
 
 const LOCAL_WASM_PATH = '/wasm';
 const LOCAL_MODEL_PATH = '/models/pose_landmarker_lite.task';
-const CDN_WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
 
 export type PoseDelegate = 'GPU' | 'CPU';
+export type { MappedRehabilitationJoints };
 
 export interface DetectFrameOutput {
   landmarks: NormalizedLandmark[] | null;
+  mappedJoints: MappedRehabilitationJoints | null;
+  armReliability: ArmReliabilityCheck;
   rawResult: PoseLandmarkerResult | null;
   isNewFrame: boolean;
   inferenceTimeMs: number;
@@ -32,10 +61,11 @@ export class PoseService {
   private cameraFrameTimestamps: number[] = [];
   private inferenceDurationsMs: number[] = [];
   private lastInferenceTimeMs = 0;
+  private latestDetection: DetectFrameOutput | null = null;
 
   /**
-   * Initializes the PoseLandmarker using local assets with GPU acceleration (default)
-   * or an explicit delegate, falling back cleanly to CPU if GPU fails.
+   * Initializes the MediaPipe PoseLandmarker using locally served model and WASM assets.
+   * Leverages GPU acceleration by default, with automatic fallback to CPU (XNNPACK).
    */
   public async initialize(preferredDelegate: PoseDelegate = 'GPU'): Promise<PoseLandmarker> {
     if (this.landmarker && this.activeDelegate === preferredDelegate) {
@@ -56,14 +86,8 @@ export class PoseService {
     this.isInitializing = true;
 
     try {
-      // 1. Resolve WASM assets (local first, CDN emergency fallback only if local fails)
-      let vision;
-      try {
-        vision = await FilesetResolver.forVisionTasks(LOCAL_WASM_PATH);
-      } catch (wasmError) {
-        console.warn('Local WASM loading failed, attempting CDN fallback:', wasmError);
-        vision = await FilesetResolver.forVisionTasks(CDN_WASM_PATH);
-      }
+      // 1. Resolve WASM assets strictly from local /public/wasm/ (no external CDN calls)
+      const vision = await FilesetResolver.forVisionTasks(LOCAL_WASM_PATH);
 
       const createWithDelegate = async (delegate: PoseDelegate) => {
         return PoseLandmarker.createFromOptions(vision, {
@@ -79,7 +103,7 @@ export class PoseService {
         });
       };
 
-      // 2. Initialize Landmarker with requested delegate, falling back to CPU if GPU fails
+      // 2. Initialize Landmarker with requested delegate, falling back cleanly to CPU if GPU fails
       if (preferredDelegate === 'CPU') {
         this.landmarker = await createWithDelegate('CPU');
         this.activeDelegate = 'CPU';
@@ -88,7 +112,7 @@ export class PoseService {
           this.landmarker = await createWithDelegate('GPU');
           this.activeDelegate = 'GPU';
         } catch (gpuError) {
-          console.warn('GPU delegate failed or unsupported, falling back to CPU:', gpuError);
+          console.warn('GPU delegate failed or unsupported on this device, falling back to CPU (XNNPACK):', gpuError);
           this.landmarker = await createWithDelegate('CPU');
           this.activeDelegate = 'CPU';
         }
@@ -96,7 +120,7 @@ export class PoseService {
 
       return this.landmarker;
     } catch (finalError) {
-      console.error('Failed to initialize MediaPipe PoseLandmarker:', finalError);
+      console.error('Failed to initialize MediaPipe PoseLandmarker from local assets:', finalError);
       this.activeDelegate = null;
       throw finalError;
     } finally {
@@ -109,7 +133,7 @@ export class PoseService {
   }
 
   /**
-   * Records arrival of a new hardware/media camera video frame (independent of inference rate).
+   * Records arrival of a new hardware camera video frame.
    */
   public recordCameraFrame(now: number = performance.now()): void {
     this.cameraFrameTimestamps.push(now);
@@ -117,17 +141,39 @@ export class PoseService {
   }
 
   /**
-   * Processes a video frame and extracts 33 pose landmarks.
-   * When the display refreshes faster than the camera frame rate, preserves the
-   * previous landmarks without clearing the skeleton overlay or spiking false states.
+   * Processes an actual video frame from the camera, extracting 33 normalized landmarks
+   * and mapping rehabilitation joints.
+   *
+   * Guarantees that only real video frames are processed (no synthetic data in production).
    */
   public detectVideoFrame(
     videoElement: HTMLVideoElement,
     hasExternalCameraFrameTracker = false
   ): DetectFrameOutput {
-    if (!this.landmarker || videoElement.readyState < 2) {
+    const defaultArmReliability: ArmReliabilityCheck = {
+      status: 'insufficient_data',
+      isLeftArmReliable: false,
+      isRightArmReliable: false,
+      isReliable: false,
+      missingOrUnreliableJoints: ['leftElbow', 'leftWrist', 'rightElbow', 'rightWrist'],
+      details: {
+        leftElbowScore: 0,
+        leftWristScore: 0,
+        rightElbowScore: 0,
+        rightWristScore: 0,
+      },
+    };
+
+    if (
+      !this.landmarker ||
+      videoElement.readyState < 2 ||
+      videoElement.videoWidth === 0 ||
+      videoElement.videoHeight === 0
+    ) {
       return {
         landmarks: null,
+        mappedJoints: null,
+        armReliability: defaultArmReliability,
         rawResult: null,
         isNewFrame: false,
         inferenceTimeMs: 0,
@@ -142,9 +188,15 @@ export class PoseService {
     const now = performance.now();
     const currentTime = videoElement.currentTime;
 
+    // Skip redundant processing if the video frame timestamp has not advanced
     if (currentTime === this.lastVideoTime) {
+      const mapped = this.extractRehabilitationJoints(this.lastLandmarks);
+      const armCheck = this.evaluateArmReliability(this.lastLandmarks);
+
       return {
         landmarks: this.lastLandmarks,
+        mappedJoints: mapped,
+        armReliability: armCheck,
         rawResult: this.lastRawResult,
         isNewFrame: false,
         inferenceTimeMs: Math.round(this.lastInferenceTimeMs),
@@ -179,8 +231,13 @@ export class PoseService {
     this.lastLandmarks = landmarks;
     this.lastRawResult = result;
 
-    return {
+    const mappedJoints = this.extractRehabilitationJoints(landmarks);
+    const armReliability = this.evaluateArmReliability(landmarks);
+
+    const output: DetectFrameOutput = {
       landmarks,
+      mappedJoints,
+      armReliability,
       rawResult: result,
       isNewFrame: true,
       inferenceTimeMs: Math.round(inferenceTime),
@@ -189,6 +246,127 @@ export class PoseService {
       inferenceFps: this.getInferenceFps(endTime),
       cameraFps: this.getCameraFps(endTime),
       activeDelegate: this.activeDelegate,
+    };
+    this.latestDetection = output;
+    return output;
+  }
+
+  public getLatestDetection(): DetectFrameOutput | null {
+    return this.latestDetection;
+  }
+
+  /**
+   * Maps MediaPipe keypoints into the 6 rehabilitation joint pairs for both left and right sides:
+   * - Shoulder (11, 12)
+   * - Elbow (13, 14)
+   * - Wrist (15, 16)
+   * - Hip (23, 24)
+   * - Knee (25, 26)
+   * - Ankle (27, 28)
+   *
+   * Each joint includes visibility scores and isReliable flag (visibility >= 0.65).
+   */
+  public extractRehabilitationJoints(
+    landmarks: NormalizedLandmark[] | null
+  ): MappedRehabilitationJoints | null {
+    if (!landmarks || landmarks.length === 0) {
+      return null;
+    }
+
+    const mapJoint = (
+      index: number,
+      bodyPart: 'shoulder' | 'elbow' | 'wrist' | 'hip' | 'knee' | 'ankle',
+      side: 'left' | 'right'
+    ): RehabilitationJoint | null => {
+      const lm = landmarks[index];
+      if (!lm) return null;
+      const vis = lm.visibility ?? lm.presence ?? 0;
+      const pres = lm.presence ?? lm.visibility ?? 0;
+
+      return {
+        bodyPart,
+        side,
+        landmarkIndex: index,
+        x: lm.x,
+        y: lm.y,
+        z: lm.z,
+        visibility: vis,
+        presence: pres,
+        isReliable: vis >= CLINICAL_VISIBILITY_THRESHOLD,
+      };
+    };
+
+    return {
+      leftShoulder: mapJoint(POSE_LANDMARKS.LEFT_SHOULDER, 'shoulder', 'left'),
+      rightShoulder: mapJoint(POSE_LANDMARKS.RIGHT_SHOULDER, 'shoulder', 'right'),
+      leftElbow: mapJoint(POSE_LANDMARKS.LEFT_ELBOW, 'elbow', 'left'),
+      rightElbow: mapJoint(POSE_LANDMARKS.RIGHT_ELBOW, 'elbow', 'right'),
+      leftWrist: mapJoint(POSE_LANDMARKS.LEFT_WRIST, 'wrist', 'left'),
+      rightWrist: mapJoint(POSE_LANDMARKS.RIGHT_WRIST, 'wrist', 'right'),
+      leftHip: mapJoint(POSE_LANDMARKS.LEFT_HIP, 'hip', 'left'),
+      rightHip: mapJoint(POSE_LANDMARKS.RIGHT_HIP, 'hip', 'right'),
+      leftKnee: mapJoint(POSE_LANDMARKS.LEFT_KNEE, 'knee', 'left'),
+      rightKnee: mapJoint(POSE_LANDMARKS.RIGHT_KNEE, 'knee', 'right'),
+      leftAnkle: mapJoint(POSE_LANDMARKS.LEFT_ANKLE, 'ankle', 'left'),
+      rightAnkle: mapJoint(POSE_LANDMARKS.RIGHT_ANKLE, 'ankle', 'right'),
+    };
+  }
+
+  /**
+   * Strictly evaluates elbow and wrist visibility.
+   * If the elbow or wrist cannot be detected reliably (visibility < 0.65),
+   * returns 'insufficient_data' so posture evaluation will pause rather than emit false deviations.
+   */
+  public evaluateArmReliability(
+    landmarks: NormalizedLandmark[] | null,
+    targetSide: 'left' | 'right' | 'either' | 'both' = 'either'
+  ): ArmReliabilityCheck {
+    const getConfidence = (index: number): number => {
+      if (!landmarks || !landmarks[index]) return 0;
+      const lm = landmarks[index];
+      return lm.visibility ?? lm.presence ?? 0;
+    };
+
+    const leftElbowScore = getConfidence(POSE_LANDMARKS.LEFT_ELBOW);
+    const leftWristScore = getConfidence(POSE_LANDMARKS.LEFT_WRIST);
+    const rightElbowScore = getConfidence(POSE_LANDMARKS.RIGHT_ELBOW);
+    const rightWristScore = getConfidence(POSE_LANDMARKS.RIGHT_WRIST);
+
+    const isLeftElbowReliable = leftElbowScore >= CLINICAL_VISIBILITY_THRESHOLD;
+    const isLeftWristReliable = leftWristScore >= CLINICAL_VISIBILITY_THRESHOLD;
+    const isRightElbowReliable = rightElbowScore >= CLINICAL_VISIBILITY_THRESHOLD;
+    const isRightWristReliable = rightWristScore >= CLINICAL_VISIBILITY_THRESHOLD;
+
+    const isLeftArmReliable = isLeftElbowReliable && isLeftWristReliable;
+    const isRightArmReliable = isRightElbowReliable && isRightWristReliable;
+
+    const missingOrUnreliableJoints: string[] = [];
+    if (!isLeftElbowReliable) missingOrUnreliableJoints.push('leftElbow');
+    if (!isLeftWristReliable) missingOrUnreliableJoints.push('leftWrist');
+    if (!isRightElbowReliable) missingOrUnreliableJoints.push('rightElbow');
+    if (!isRightWristReliable) missingOrUnreliableJoints.push('rightWrist');
+
+    const isReliable =
+      targetSide === 'left'
+        ? isLeftArmReliable
+        : targetSide === 'right'
+        ? isRightArmReliable
+        : targetSide === 'both'
+        ? isLeftArmReliable && isRightArmReliable
+        : isLeftArmReliable || isRightArmReliable;
+
+    return {
+      status: isReliable ? 'reliable' : 'insufficient_data',
+      isLeftArmReliable,
+      isRightArmReliable,
+      isReliable,
+      missingOrUnreliableJoints,
+      details: {
+        leftElbowScore,
+        leftWristScore,
+        rightElbowScore,
+        rightWristScore,
+      },
     };
   }
 
@@ -224,8 +402,8 @@ export class PoseService {
     const checkVisibility = (index: number): boolean => {
       const lm = landmarks[index];
       if (!lm) return false;
-      const vis = lm.visibility ?? lm.presence ?? 1.0;
-      return vis >= 0.65;
+      const vis = lm.visibility ?? lm.presence ?? 0;
+      return vis >= CLINICAL_VISIBILITY_THRESHOLD;
     };
 
     const check: KeyJointCheck = {
@@ -261,18 +439,17 @@ export class PoseService {
 
     const totalVisibleJoints = upperJointsCount + lowerJointsCount;
 
-    let status: TrackingStatus = 'tracking-stable';
-
+    let resolvedStatus: TrackingStatus;
     if (totalVisibleJoints === 0) {
-      status = 'low-confidence';
+      resolvedStatus = 'low-confidence';
     } else if (upperJointsCount < 3) {
-      status = 'partially-visible';
+      resolvedStatus = 'partially-visible';
     } else {
-      status = 'tracking-stable';
+      resolvedStatus = 'tracking-stable';
     }
 
     return {
-      trackingStatus: status,
+      trackingStatus: resolvedStatus,
       keyJoints: check,
     };
   }
