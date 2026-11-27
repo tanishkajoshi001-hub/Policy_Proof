@@ -58,6 +58,16 @@ npm run dev
 
 ---
 
+## Third-Party Libraries & Licenses
+
+- **MediaPipe PoseLandmarker (`@mediapipe/tasks-vision`)**:
+  - **Pinned Version**: `0.10.35`
+  - **License**: [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) (Copyright Google LLC)
+  - **Assets**: On-device WebAssembly binaries (`public/wasm/`) and model assets (`public/models/pose_landmarker_lite.task`) are distributed under the Apache License 2.0.
+  - **Execution**: 100% on-device client-side inference in WebAssembly/WebGL with CPU XNNPACK fallback; zero external telemetry or video transmission.
+
+---
+
 ## Privacy & Medical Disclaimer
 
 - **Privacy**: Camera streams (`audio: false`) and MediaPipe pose inference run locally in the browser using local WASM and model files. No raw camera frames are uploaded or recorded.

@@ -65,10 +65,11 @@ export const PoseCameraView: React.FC<PoseCameraViewProps> = ({
           setActiveDelegate(poseService.getActiveDelegate());
           setModelLoading(false);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!isCancelled) {
           console.error('Pose model loading failed:', err);
-          setModelError(err?.message || 'Failed to load local pose model.');
+          const msg = err instanceof Error ? err.message : 'Failed to load local pose model.';
+          setModelError(msg);
           setModelLoading(false);
         }
       }
@@ -305,15 +306,49 @@ export const PoseCameraView: React.FC<PoseCameraViewProps> = ({
       {cameraState !== 'active' && (
         <div className="relative z-20 flex flex-col items-center justify-center p-6 text-center max-w-md">
           <div className="w-16 h-16 rounded-2xl bg-slate-800/90 border border-slate-700 flex items-center justify-center mb-4 text-brand-400 shadow-inner">
-            <Camera className="w-8 h-8" />
+            {cameraState === 'interrupted' ? (
+              <AlertCircle className="w-8 h-8 text-amber-400" />
+            ) : cameraState === 'permission_denied' ||
+              cameraState === 'unavailable' ||
+              cameraState === 'error' ||
+              cameraState === 'permission-denied' ||
+              cameraState === 'camera-unavailable' ? (
+              <AlertCircle className="w-8 h-8 text-rose-400" />
+            ) : cameraState === 'requesting_permission' ||
+              cameraState === 'initializing' ||
+              cameraState === 'requesting-permission' ? (
+              <RefreshCw className="w-8 h-8 text-brand-400 animate-spin" />
+            ) : (
+              <Camera className="w-8 h-8" />
+            )}
           </div>
           <h3 className="text-lg font-semibold text-slate-200 mb-2">
-            {cameraState === 'requesting-permission' || cameraState === 'initializing'
+            {cameraState === 'requesting_permission' || cameraState === 'requesting-permission'
               ? t.requestingPermission
+              : cameraState === 'initializing'
+              ? 'Initializing camera stream...'
+              : cameraState === 'interrupted'
+              ? t.cameraInterruptedTitle
+              : cameraState === 'permission_denied' || cameraState === 'permission-denied'
+              ? t.permissionDeniedTitle
+              : cameraState === 'unavailable' || cameraState === 'camera-unavailable'
+              ? t.cameraNotFoundTitle
+              : cameraState === 'error'
+              ? t.genericErrorTitle
               : t.cameraReady}
           </h3>
           <p className="text-sm text-slate-400 mb-4 leading-relaxed">
-            {t.cameraOff}
+            {cameraState === 'interrupted'
+              ? t.cameraInterruptedMsg
+              : cameraState === 'permission_denied' || cameraState === 'permission-denied'
+              ? t.permissionDeniedMsg
+              : cameraState === 'unavailable' || cameraState === 'camera-unavailable'
+              ? t.cameraNotFoundMsg
+              : cameraState === 'error'
+              ? t.genericErrorMsg
+              : cameraState === 'requesting_permission' || cameraState === 'requesting-permission'
+              ? 'Please select "Allow" in your browser prompt to begin.'
+              : t.cameraOff}
           </p>
           <div className="flex items-center gap-2 text-xs text-brand-300/80 bg-brand-950/60 px-3 py-1.5 rounded-full border border-brand-800/50">
             <ShieldCheck className="w-4 h-4 text-brand-400" />

@@ -8,7 +8,11 @@ import { NotFoundPage } from '../boundaries/NotFoundPage';
 export const AppRouter: React.FC = () => {
   const { currentPath, navigate } = useAppShell();
 
-  if (currentPath === APP_ROUTES.HOME || currentPath.startsWith(APP_ROUTES.TRACKING)) {
+  if (
+    currentPath === APP_ROUTES.HOME ||
+    currentPath.startsWith(APP_ROUTES.TRACKING) ||
+    currentPath === APP_ROUTES.WORKBENCH
+  ) {
     return <TrackingSlot />;
   }
 

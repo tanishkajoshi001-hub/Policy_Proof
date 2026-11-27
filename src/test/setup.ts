@@ -1,4 +1,4 @@
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 
 // Polyfill global mocks for JSDOM
 if (typeof window !== 'undefined') {
@@ -6,7 +6,7 @@ if (typeof window !== 'undefined') {
   window.HTMLMediaElement.prototype.pause = () => {};
 
   // Mock HTMLCanvasElement.prototype.getContext
-  (HTMLCanvasElement.prototype as any).getContext = () => {
+  (HTMLCanvasElement.prototype as unknown as HTMLCanvasElement).getContext = () => {
     return {
       clearRect: () => {},
       beginPath: () => {},
@@ -17,6 +17,11 @@ if (typeof window !== 'undefined') {
       fill: () => {},
       save: () => {},
       restore: () => {},
+      closePath: () => {},
+      rect: () => {},
+      roundRect: () => {},
+      measureText: (text: string) => ({ width: text.length * 8 }),
+      fillText: () => {},
     } as unknown as CanvasRenderingContext2D;
   };
 }

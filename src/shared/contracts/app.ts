@@ -26,6 +26,7 @@ export type SupportedLanguage = 'en' | 'hi';
 export const APP_ROUTES = {
   HOME: '/',
   TRACKING: '/tracking',
+  WORKBENCH: '/workbench',
   PATIENT: '/patient',
   DOCTOR: '/doctor',
 } as const;

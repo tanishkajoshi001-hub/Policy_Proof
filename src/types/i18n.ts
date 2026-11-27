@@ -11,6 +11,7 @@ export interface LocalizedStrings {
   startCamera: string;
   stopCamera: string;
   restartCamera: string;
+  resumeCamera: string;
   switchCamera: string;
   cameraReady: string;
   cameraOff: string;
@@ -19,6 +20,8 @@ export interface LocalizedStrings {
   permissionDeniedMsg: string;
   cameraNotFoundTitle: string;
   cameraNotFoundMsg: string;
+  cameraInterruptedTitle: string;
+  cameraInterruptedMsg: string;
   genericErrorTitle: string;
   genericErrorMsg: string;
   retryButton: string;
@@ -38,4 +41,8 @@ export interface LocalizedStrings {
   latencyLabel: string;
   cameraSelectorLabel: string;
   mirrorToggle: string;
+  resolutionLabel: string;
+  resolutionBalanced: string;
+  resolutionPerformance: string;
+  resolutionHigh: string;
 }
