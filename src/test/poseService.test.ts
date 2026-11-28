@@ -195,4 +195,44 @@ describe('PoseService Key Joint Mapping & Confidence Validation', () => {
     expect(armCheck.status).toBe('insufficient_data');
     expect(armCheck.missingOrUnreliableJoints).toContain('leftWrist');
   });
+
+  it('excludes initial 5 cold-start warmup frames from steady-state latency and P95 telemetry', () => {
+    const svc = new PoseService();
+    let fakeTime = 1000;
+    let callCount = 0;
+    const detectForVideoMock = vi.fn().mockImplementation(() => {
+      callCount++;
+      // First 5 warmup frames take 600ms each; steady-state frames take 15ms
+      fakeTime += callCount <= 5 ? 600 : 15;
+      return { landmarks: [createDummyLandmarks(0.9)] };
+    });
+    vi.spyOn(performance, 'now').mockImplementation(() => fakeTime);
+
+    (svc as unknown as { landmarker: unknown }).landmarker = {
+      detectForVideo: detectForVideoMock,
+      close: vi.fn(),
+    };
+
+    for (let i = 1; i <= 8; i++) {
+      const vid = {
+        readyState: 2,
+        videoWidth: 640,
+        videoHeight: 480,
+        currentTime: i * 0.033,
+      } as HTMLVideoElement;
+      const out = svc.detectVideoFrame(vid);
+      if (i <= 5) {
+        expect(out.warmupComplete).toBe(i === 5);
+        expect(svc.getAverageLatencyMs()).toBe(0);
+      } else {
+        expect(out.warmupComplete).toBe(true);
+      }
+    }
+
+    expect(svc.getAverageLatencyMs()).toBe(15);
+    expect(svc.getP95LatencyMs()).toBe(15);
+
+    svc.resetMetrics();
+    expect(svc.getAverageLatencyMs()).toBe(0);
+  });
 });

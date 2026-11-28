@@ -147,19 +147,19 @@ describe('Person 3 Repetition, Hold Timer & Structured Feedback', () => {
       expect(snap.phase).toBe('outbound');
     });
 
-    it('pauses state machine and freezes count on confidence loss or tracking gap', () => {
+    it('pauses state machine and freezes count on prolonged confidence loss (> maxTrackingGapMs or debounce)', () => {
       let now = 1000;
       repStateMachine.update({ angleDeg: 160, confidence: 0.9, isReliable: true, now });
       now += 200;
       repStateMachine.update({ angleDeg: 90, confidence: 0.9, isReliable: true, now });
 
-      // Loss of confidence / obscured wrist
-      now += 1500; // Exceeds maxTrackingGapMs (1000ms)
+      // Loss of confidence / obscured wrist exceeding maxTrackingGapMs
+      now += 1500;
       const snap = repStateMachine.update({
         angleDeg: null,
         confidence: 0.3,
         isReliable: false,
-        missingLandmarks: ['leftWrist'],
+        missingLandmarks: ['LEFT_WRIST'],
         now,
       });
 
@@ -167,6 +167,69 @@ describe('Person 3 Repetition, Hold Timer & Structured Feedback', () => {
       expect(snap.formStatus).toBe('insufficient_data');
       expect(snap.feedbackCode).toBe('POSE_NOT_CLEAR');
       expect(repStateMachine.getState()).toBe('PAUSED_LOW_CONFIDENCE');
+    });
+
+    it('supports ascending-angle exercises (e.g., 25° start -> 160° target -> 25° return) without deadlocking', () => {
+      const ascendingDef = {
+        ...ELBOW_FLEXION_EXTENSION_REP,
+        id: 'ascending_demo',
+        angle: {
+          proximal: 'LEFT_SHOULDER',
+          vertex: 'LEFT_ELBOW',
+          distal: 'LEFT_WRIST',
+          startRangeDeg: [10, 40] as [number, number],
+          targetRangeDeg: [150, 175] as [number, number],
+          toleranceDeg: 10,
+        },
+        targetEntryDwellMs: 0,
+      };
+      const sm = new RepStateMachine(ascendingDef);
+
+      let now = 1000;
+      let snap = sm.update({ angleDeg: 25, confidence: 0.95, isReliable: true, now });
+      expect(snap.phase).toBe('outbound');
+
+      now += 200;
+      snap = sm.update({ angleDeg: 95, confidence: 0.95, isReliable: true, now });
+      expect(snap.phase).toBe('outbound');
+      expect(snap.feedbackCode).toBe('MOVE_TOWARD_TARGET');
+
+      // Single-frame target touch with targetEntryDwellMs = 0 transitions immediately
+      now += 200;
+      snap = sm.update({ angleDeg: 160, confidence: 0.95, isReliable: true, now });
+      expect(snap.phase).toBe('target');
+      expect(snap.feedbackCode).toBe('TARGET_REACHED');
+
+      // Exiting target downward (95° < 140 - 3) enters returning phase
+      now += 200;
+      snap = sm.update({ angleDeg: 95, confidence: 0.95, isReliable: true, now });
+      expect(snap.phase).toBe('returning');
+      expect(snap.feedbackCode).toBe('RETURN_TO_START');
+
+      // Returning to start [10, 40] counts rep 1 and emits observable 'complete' phase
+      now += 200;
+      snap = sm.update({ angleDeg: 25, confidence: 0.95, isReliable: true, now });
+      expect(snap.repCount).toBe(1);
+      expect(snap.phase).toBe('complete');
+
+      // Following frame transitions cleanly into next cycle without double-counting
+      now += 200;
+      snap = sm.update({ angleDeg: 25, confidence: 0.95, isReliable: true, now });
+      expect(snap.repCount).toBe(1);
+      expect(snap.phase).toBe('outbound');
+    });
+
+    it('rejects impossible angular-velocity jumps (30/60fps landmark teleport spikes)', () => {
+      let now = 1000;
+      repStateMachine.update({ angleDeg: 165, confidence: 0.95, isReliable: true, now });
+
+      // 135° jump in 33ms (4090 deg/s) -> must reject as POSE_NOT_CLEAR
+      now += 33;
+      const glitchSnap = repStateMachine.update({ angleDeg: 30, confidence: 0.95, isReliable: true, now });
+      expect(glitchSnap.formStatus).toBe('insufficient_data');
+      expect(glitchSnap.feedbackCode).toBe('POSE_NOT_CLEAR');
+      expect(glitchSnap.missingLandmarks).toContain('angle_jump_rejected');
+      expect(repStateMachine.getState()).toBe('MOVING_TO_TARGET');
     });
 
     it('tolerates brief confidence flicker (< maxTrackingGapMs) without wiping valid rep cycle progress', () => {
@@ -317,14 +380,45 @@ describe('Person 3 Repetition, Hold Timer & Structured Feedback', () => {
       snap = holdStateMachine.update({ angleDeg: 100, confidence: 0.9, isReliable: true, now });
       expect(snap.holdElapsedMs).toBe(0);
 
-      // Enters target range (60°): timer starts
+      // Enters target range (60°): must satisfy targetEntryDwellMs (150ms) before starting hold timer
       now += 500;
       snap = holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
-      expect(snap.phase).toBe('holding');
+      expect(snap.phase).toBe('outbound');
+      expect(snap.holdElapsedMs).toBe(0);
 
-      now += 1000;
+      // Brief 50ms touch below 150ms dwell still must NOT accrue hold time
+      now += 50;
+      snap = holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
+      expect(snap.phase).toBe('outbound');
+      expect(snap.holdElapsedMs).toBe(0);
+
+      // Once 150ms dwell passes continuously, hold timer starts and counts full continuous hold
+      now += 150;
+      snap = holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
+      expect(snap.phase).toBe('holding');
+      expect(snap.holdElapsedMs).toBe(200);
+
+      now += 800;
       snap = holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
       expect(snap.holdElapsedMs).toBe(1000);
+    });
+
+    it('strictly caps holdElapsedMs at holdGoalMs after completion without over-accumulating', () => {
+      let now = 1000;
+      holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
+      now += 1500;
+      holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
+      now += 1500;
+      const done1 = holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
+      expect(done1.holdElapsedMs).toBe(3000);
+      expect(done1.holdComplete).toBe(true);
+      expect(done1.status).toBe('completed');
+
+      // Subsequent ticks after completion must keep holdElapsedMs capped at 3000ms
+      now += 1000;
+      const done2 = holdStateMachine.update({ angleDeg: 60, confidence: 0.9, isReliable: true, now });
+      expect(done2.holdElapsedMs).toBe(3000);
+      expect(done2.holdComplete).toBe(true);
     });
 
     it('pauses immediately if the user leaves the target range', () => {
@@ -426,15 +520,26 @@ describe('Person 3 Repetition, Hold Timer & Structured Feedback', () => {
       expect(snap.formStatus).toBe('insufficient_data');
     });
 
-    it('emits FORM_OUT_OF_RANGE when user is outside configured starting bounds', () => {
-      const snap = repStateMachine.update({
-        angleDeg: 90, // Not in start range [145, 180]
+    it('guides cleanly with RETURN_TO_START when starting mid-ROM and emits FORM_OUT_OF_RANGE when outside ROM', () => {
+      const midRomSnap = repStateMachine.update({
+        angleDeg: 115, // Between target [50, 75]+10 and start [145, 180]
         confidence: 0.9,
         isReliable: true,
+        now: 1000,
       });
 
-      expect(snap.feedbackCode).toBe('FORM_OUT_OF_RANGE');
-      expect(snap.formStatus).toBe('incorrect');
+      expect(midRomSnap.feedbackCode).toBe('RETURN_TO_START');
+      expect(midRomSnap.formStatus).toBe('neutral');
+
+      const outOfRomSnap = repStateMachine.update({
+        angleDeg: 25, // Below targetMin (40)
+        confidence: 0.9,
+        isReliable: true,
+        now: 1200,
+      });
+
+      expect(outOfRomSnap.feedbackCode).toBe('FORM_OUT_OF_RANGE');
+      expect(outOfRomSnap.formStatus).toBe('incorrect');
     });
 
     it('emits MOVE_TOWARD_TARGET when arm is in position and moving', () => {
@@ -494,7 +599,7 @@ describe('Person 3 Repetition, Hold Timer & Structured Feedback', () => {
     it('emits corrective feedback within 1000ms threshold when a posture error occurs', () => {
       const t0 = performance.now();
       const snap = repStateMachine.update({
-        angleDeg: 85, // Outside start range [145, 180]
+        angleDeg: 20, // Outside valid ROM (< targetMin 40)
         confidence: 0.9,
         isReliable: true,
         now: t0,

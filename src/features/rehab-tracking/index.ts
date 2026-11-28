@@ -21,9 +21,16 @@ export {
   angleAtVertex,
   calculateElbowAngle,
   calculateJointAngle,
+  resolveLandmarkByName,
+  resolveLandmarkIndex,
+  resolveConfiguredTriplet,
   clamp,
   isArmJointReliable,
   EPSILON,
+  type Point2D,
+  type VideoDimensions,
+  type AngleCalculationResult,
+  type ResolvedTripletResult,
 } from './utils/angleCalculator';
 
 // Form evaluation utilities

@@ -3,15 +3,13 @@
  *
  * Implements the Person 3 Motion Engine State Machine Specification:
  * - WAITING_FOR_START -> MOVING_TO_TARGET -> TARGET_REACHED -> RETURNING -> REP_COMPLETED
- * - Strict full-cycle validation: If the user bends their elbow but does not return
- *   to the starting position, the repetition is NOT counted.
- * - Anti-jitter protection: Boundary hysteresis and targetEntryDwellMs dwell time.
- * - Duplicate-count prevention: Single increment per verified cycle.
- * - Monotonic hold timer: Uses performance.now() to measure valid hold duration.
- * - Returns holdElapsedMs, holdGoalMs, and holdComplete separately.
- * - Emits structured feedback codes for Person 4 to translate into patient text and speech:
- *   MOVE_TOWARD_TARGET, TARGET_REACHED, RETURN_TO_START, FORM_OUT_OF_RANGE,
- *   POSE_NOT_CLEAR, PERSON_NOT_VISIBLE, EXERCISE_COMPLETE.
+ * - Supports both descending (e.g. 160° -> 60°) and ascending (e.g. 25° -> 160°) angle ranges.
+ * - Strict full-cycle validation: returning without reaching target, or failing to return,
+ *   does NOT count a repetition.
+ * - Anti-jitter protection: boundary hysteresis, targetEntryDwellMs in BOTH rep & hold modes,
+ *   impossible angular-jump guard, stale-timestamp guard, max-cycle guard, and confidence debounce.
+ * - Monotonic hold timer: uses performance.now(), freezes immediately on range exit or tracking loss,
+ *   and caps holdElapsedMs strictly at holdGoalMs upon completion.
  */
 
 import {
@@ -22,16 +20,10 @@ import {
   TrackingStatus,
   TrackingSnapshot,
   FeedbackCode,
+  FrameEvaluationInput,
 } from '../types';
 
-export interface StateMachineUpdateInput {
-  angleDeg: number | null;
-  confidence: number | null;
-  isReliable: boolean;
-  isPersonVisible?: boolean;
-  missingLandmarks?: string[];
-  now?: number; // Monotonic timestamp (defaults to performance.now())
-}
+export type StateMachineUpdateInput = FrameEvaluationInput;
 
 export class RepStateMachine {
   private definition: ExerciseDefinition;
@@ -39,20 +31,25 @@ export class RepStateMachine {
   private repCount = 0;
   private holdElapsedMs = 0;
 
-  // Monotonic timestamps
+  // Monotonic timestamps & tracking guards
   private cycleStartTime: number | null = null;
   private targetEntryTime: number | null = null;
   private lastHoldTickTime: number | null = null;
   private lastValidTrackingTime: number = performance.now();
   private lastExplicitNow: number | null = null;
+  private lastValidAngleDeg: number | null = null;
+  private lastValidAngleTime: number | null = null;
+  private consecutiveLowConfidenceFrames = 0;
 
   // Frame telemetry
   private correctFrames = 0;
   private evaluatedFrames = 0;
 
-  // Anti-jitter hysteresis margin in degrees and default max cycle guard
+  // Engineering guards (configurable via ExerciseDefinition where present)
   private readonly HYSTERESIS_DEG = 3;
   private readonly DEFAULT_MAX_CYCLE_DURATION_MS = 15000;
+  private readonly DEFAULT_MAX_ANGULAR_VELOCITY_DEG_PER_SEC = 900;
+  private readonly LOW_CONFIDENCE_DEBOUNCE_FRAMES = 3;
 
   constructor(definition: ExerciseDefinition) {
     this.definition = definition;
@@ -68,6 +65,9 @@ export class RepStateMachine {
     this.lastHoldTickTime = null;
     this.lastValidTrackingTime = performance.now();
     this.lastExplicitNow = null;
+    this.lastValidAngleDeg = null;
+    this.lastValidAngleTime = null;
+    this.consecutiveLowConfidenceFrames = 0;
     this.correctFrames = 0;
     this.evaluatedFrames = 0;
   }
@@ -89,9 +89,6 @@ export class RepStateMachine {
     return Math.round(this.holdElapsedMs);
   }
 
-  /**
-   * Returns hold timer duration, goal, and completion status separately.
-   */
   public getCycleStartTime(): number | null {
     return this.cycleStartTime;
   }
@@ -129,7 +126,7 @@ export class RepStateMachine {
   }
 
   /**
-   * Freezes hold accumulation and optionally cycle progression on interruption.
+   * Freezes hold accumulation and optionally pauses cycle progression on interruption.
    */
   public freeze(pauseCycle = true): void {
     this.lastHoldTickTime = null;
@@ -143,7 +140,7 @@ export class RepStateMachine {
    * Primary frame evaluation loop.
    * Processes current joint angle and landmark reliability to drive state transitions.
    */
-  public update(input: StateMachineUpdateInput): TrackingSnapshot {
+  public update(input: FrameEvaluationInput): TrackingSnapshot {
     const now = input.now ?? performance.now();
     const {
       angleDeg,
@@ -151,9 +148,10 @@ export class RepStateMachine {
       isReliable,
       isPersonVisible = true,
       missingLandmarks = [],
+      skipJumpGuard = false,
     } = input;
 
-    // Guard against stale or backwards explicit frame timestamps
+    // 0a. Guard against stale or backwards explicit frame timestamps
     if (input.now !== undefined) {
       if (this.lastExplicitNow !== null && input.now <= this.lastExplicitNow) {
         this.freeze(false);
@@ -171,8 +169,9 @@ export class RepStateMachine {
       this.lastExplicitNow = input.now;
     }
 
-    // 0. Person not detected at all in frame
+    // 0b. Person not detected in frame
     if (!isPersonVisible) {
+      this.consecutiveLowConfidenceFrames = 0;
       this.freeze(true);
       return this.buildSnapshot({
         status: 'no_person',
@@ -186,10 +185,13 @@ export class RepStateMachine {
       });
     }
 
-    // 1. Landmark confidence loss or tracking dropout
+    // 1. Landmark confidence loss or tracking dropout (with debounce + gap threshold)
     if (!isReliable || angleDeg === null) {
+      this.consecutiveLowConfidenceFrames++;
       const trackingGap = now - this.lastValidTrackingTime;
-      const exceedsGap = trackingGap > this.definition.maxTrackingGapMs;
+      const exceedsGap =
+        trackingGap > this.definition.maxTrackingGapMs ||
+        this.consecutiveLowConfidenceFrames >= this.LOW_CONFIDENCE_DEBOUNCE_FRAMES;
       this.freeze(exceedsGap);
 
       return this.buildSnapshot({
@@ -199,15 +201,46 @@ export class RepStateMachine {
         angleDeg: null,
         feedbackCode: 'POSE_NOT_CLEAR',
         confidence,
-        missingLandmarks: missingLandmarks.length > 0 ? missingLandmarks : ['elbow', 'wrist'],
+        missingLandmarks:
+          missingLandmarks.length > 0
+            ? missingLandmarks
+            : [this.definition.angle.vertex, this.definition.angle.distal],
         now,
       });
     }
 
-    // Tracking is valid; update last seen timestamp
-    this.lastValidTrackingTime = now;
+    // 2. Impossible angular-velocity spike rejection (30/60fps landmark teleport guard)
+    const maxVel =
+      this.definition.maxAngularVelocityDegPerSec ?? this.DEFAULT_MAX_ANGULAR_VELOCITY_DEG_PER_SEC;
+    if (
+      !skipJumpGuard &&
+      this.lastValidAngleDeg !== null &&
+      this.lastValidAngleTime !== null
+    ) {
+      const dtSec = (now - this.lastValidAngleTime) / 1000;
+      const angleDelta = Math.abs(angleDeg - this.lastValidAngleDeg);
+      if (dtSec > 0 && dtSec <= 0.12 && angleDelta > Math.max(60, maxVel * dtSec)) {
+        this.lastHoldTickTime = null;
+        return this.buildSnapshot({
+          status: 'low_confidence',
+          formStatus: 'insufficient_data',
+          phase: this.mapStateToPhase(this.state),
+          angleDeg: null,
+          feedbackCode: 'POSE_NOT_CLEAR',
+          confidence,
+          missingLandmarks: ['angle_jump_rejected'],
+          now,
+        });
+      }
+    }
 
-    // Resume from low confidence pause
+    // Tracking and geometry are valid
+    this.consecutiveLowConfidenceFrames = 0;
+    this.lastValidTrackingTime = now;
+    this.lastValidAngleDeg = angleDeg;
+    this.lastValidAngleTime = now;
+
+    // Resume cleanly from low-confidence pause without inferring missed movement
     if (this.state === 'PAUSED_LOW_CONFIDENCE') {
       this.state = 'WAITING_FOR_START';
       this.cycleStartTime = null;
@@ -220,10 +253,17 @@ export class RepStateMachine {
     const targetMin = targetRangeDeg[0] - toleranceDeg;
     const targetMax = targetRangeDeg[1] + toleranceDeg;
 
+    const startMid = (startRangeDeg[0] + startRangeDeg[1]) / 2;
+    const targetMid = (targetRangeDeg[0] + targetRangeDeg[1]) / 2;
+    const isDescending = targetMid <= startMid;
+
     const inStartBand = angleDeg >= startMin && angleDeg <= startMax;
     const inTargetBand = angleDeg >= targetMin && angleDeg <= targetMax;
+    const inBetweenCorridor = isDescending
+      ? angleDeg > targetMax && angleDeg < startMin
+      : angleDeg > startMax && angleDeg < targetMin;
 
-    // Track frame evaluation metrics
+    // Track evaluated frames (excluding insufficient_data frames)
     this.evaluatedFrames++;
     let formStatus: FormStatus = 'neutral';
     let feedbackCode: FeedbackCode;
@@ -234,41 +274,98 @@ export class RepStateMachine {
     if (this.definition.mode === 'hold') {
       const holdGoalMs = (this.definition.holdSeconds ?? 3) * 1000;
 
-      // Start hold accumulation ONLY when target posture and confidence requirements are met
-      if (inTargetBand) {
-        formStatus = 'correct';
-        this.correctFrames++;
-        feedbackCode = 'TARGET_REACHED';
-        this.state = 'TARGET_REACHED';
+      // Once hold goal is complete, freeze elapsed time strictly at holdGoalMs
+      if (this.state === 'REP_COMPLETED' || this.holdElapsedMs >= holdGoalMs) {
+        this.holdElapsedMs = holdGoalMs;
+        this.state = 'REP_COMPLETED';
+        this.lastHoldTickTime = null;
+        return this.buildSnapshot({
+          status: 'completed',
+          formStatus: inTargetBand ? 'correct' : 'neutral',
+          phase: 'complete',
+          angleDeg,
+          feedbackCode: 'EXERCISE_COMPLETE',
+          confidence,
+          missingLandmarks: [],
+          now,
+        });
+      }
 
-        // Accumulate monotonic hold time
-        if (this.lastHoldTickTime !== null) {
-          const delta = now - this.lastHoldTickTime;
-          // Guard against clock anomalies
-          if (delta > 0 && delta <= this.definition.maxTrackingGapMs + 1000) {
-            this.holdElapsedMs += delta;
+      if (inTargetBand) {
+        if (this.state !== 'TARGET_REACHED') {
+          if (this.definition.targetEntryDwellMs <= 0) {
+            this.state = 'TARGET_REACHED';
+            this.lastHoldTickTime = now;
+            formStatus = 'correct';
+            this.correctFrames++;
+            feedbackCode = 'TARGET_REACHED';
+          } else {
+            if (this.targetEntryTime === null) {
+              this.targetEntryTime = now;
+            }
+            if (now - this.targetEntryTime >= this.definition.targetEntryDwellMs) {
+              this.state = 'TARGET_REACHED';
+              const initialDelta = now - this.targetEntryTime;
+              if (initialDelta > 0 && initialDelta <= this.definition.maxTrackingGapMs + 1000) {
+                this.holdElapsedMs = Math.min(holdGoalMs, this.holdElapsedMs + initialDelta);
+              }
+              this.lastHoldTickTime = now;
+              formStatus = 'correct';
+              this.correctFrames++;
+              feedbackCode = 'TARGET_REACHED';
+            } else {
+              // Dwelling before confirming hold posture
+              this.state = 'MOVING_TO_TARGET';
+              formStatus = 'neutral';
+              feedbackCode = 'MOVE_TOWARD_TARGET';
+            }
           }
+        } else {
+          formStatus = 'correct';
+          this.correctFrames++;
+          feedbackCode = 'TARGET_REACHED';
+
+          if (this.lastHoldTickTime !== null) {
+            const delta = now - this.lastHoldTickTime;
+            if (delta > 0 && delta <= this.definition.maxTrackingGapMs + 1000) {
+              this.holdElapsedMs = Math.min(holdGoalMs, this.holdElapsedMs + delta);
+            }
+          }
+          this.lastHoldTickTime = now;
         }
-        this.lastHoldTickTime = now;
 
         if (this.holdElapsedMs >= holdGoalMs) {
-          feedbackCode = 'EXERCISE_COMPLETE';
+          this.holdElapsedMs = holdGoalMs;
           this.state = 'REP_COMPLETED';
+          this.lastHoldTickTime = null;
+          feedbackCode = 'EXERCISE_COMPLETE';
         }
       } else {
-        // Pause immediately if user leaves target range
+        // Exited target range: pause accumulation and reset dwell timer immediately
+        this.targetEntryTime = null;
         this.lastHoldTickTime = null;
-        formStatus = 'incorrect';
-        feedbackCode = inStartBand ? 'MOVE_TOWARD_TARGET' : 'FORM_OUT_OF_RANGE';
-        if (this.holdElapsedMs < holdGoalMs) {
-          this.state = inStartBand ? 'WAITING_FOR_START' : 'MOVING_TO_TARGET';
+        if (inStartBand) {
+          formStatus = 'neutral';
+          feedbackCode = 'MOVE_TOWARD_TARGET';
+          this.state = 'WAITING_FOR_START';
+        } else {
+          formStatus = 'incorrect';
+          feedbackCode = 'FORM_OUT_OF_RANGE';
+          this.state = 'MOVING_TO_TARGET';
         }
       }
 
+      const holdComplete = this.holdElapsedMs >= holdGoalMs;
       return this.buildSnapshot({
-        status: this.holdElapsedMs >= holdGoalMs ? 'completed' : 'tracking',
+        status: holdComplete ? 'completed' : 'tracking',
         formStatus,
-        phase: this.holdElapsedMs >= holdGoalMs ? 'complete' : inTargetBand ? 'holding' : 'waiting',
+        phase: holdComplete
+          ? 'complete'
+          : this.state === 'TARGET_REACHED'
+          ? 'holding'
+          : this.state === 'MOVING_TO_TARGET'
+          ? 'outbound'
+          : 'waiting',
         angleDeg,
         feedbackCode,
         confidence,
@@ -284,7 +381,6 @@ export class RepStateMachine {
     const maxCycleDurationMs =
       this.definition.maxCycleDurationMs ?? this.DEFAULT_MAX_CYCLE_DURATION_MS;
 
-    // Reject stale / excessively prolonged incomplete cycles (PRD Section 7.4)
     if (
       (this.state === 'MOVING_TO_TARGET' ||
         this.state === 'TARGET_REACHED' ||
@@ -307,14 +403,22 @@ export class RepStateMachine {
       });
     }
 
+    // Advance out of observable intermediate REP_COMPLETED on the following frame
+    if (this.state === 'REP_COMPLETED' && this.repCount < repGoal) {
+      this.state = 'WAITING_FOR_START';
+    }
+
     switch (this.state) {
       case 'WAITING_FOR_START': {
         if (inStartBand) {
           feedbackCode = 'MOVE_TOWARD_TARGET';
           formStatus = 'neutral';
-          // User is in starting position; prepare for movement
           this.cycleStartTime = now;
           this.state = 'MOVING_TO_TARGET';
+        } else if (inBetweenCorridor) {
+          // User started mid-ROM: guide cleanly toward starting position without flagging red error
+          feedbackCode = 'RETURN_TO_START';
+          formStatus = 'neutral';
         } else {
           feedbackCode = 'FORM_OUT_OF_RANGE';
           formStatus = 'incorrect';
@@ -326,74 +430,92 @@ export class RepStateMachine {
         if (inTargetBand) {
           formStatus = 'correct';
           feedbackCode = 'TARGET_REACHED';
-          // Anti-jitter: require target entry dwell
-          if (this.targetEntryTime === null) {
-            this.targetEntryTime = now;
-          } else if (now - this.targetEntryTime >= this.definition.targetEntryDwellMs) {
+
+          if (this.definition.targetEntryDwellMs <= 0) {
             this.state = 'TARGET_REACHED';
             this.correctFrames++;
+          } else {
+            if (this.targetEntryTime === null) {
+              this.targetEntryTime = now;
+            }
+            if (now - this.targetEntryTime >= this.definition.targetEntryDwellMs) {
+              this.state = 'TARGET_REACHED';
+              this.correctFrames++;
+            }
           }
         } else {
-          // Reset dwell if exited before threshold
           this.targetEntryTime = null;
-          formStatus = 'neutral';
-          feedbackCode = 'MOVE_TOWARD_TARGET';
-
-          // If user aborted movement and returned to start without reaching target: reset cycle
           if (inStartBand) {
             this.state = 'MOVING_TO_TARGET';
             this.cycleStartTime = now;
+            formStatus = 'neutral';
+            feedbackCode = 'MOVE_TOWARD_TARGET';
+          } else if (inBetweenCorridor) {
+            formStatus = 'neutral';
+            feedbackCode = 'MOVE_TOWARD_TARGET';
+          } else {
+            formStatus = 'incorrect';
+            feedbackCode = 'FORM_OUT_OF_RANGE';
           }
         }
         break;
       }
 
       case 'TARGET_REACHED': {
-        formStatus = 'correct';
-        this.correctFrames++;
-        feedbackCode = 'TARGET_REACHED';
+        const startedReturning = isDescending
+          ? !inTargetBand && angleDeg > targetMax + this.HYSTERESIS_DEG
+          : !inTargetBand && angleDeg < targetMin - this.HYSTERESIS_DEG;
 
-        // When user starts extending arm away from target back toward start
-        if (!inTargetBand && angleDeg > targetMax) {
-          this.state = 'RETURNING';
-          feedbackCode = 'RETURN_TO_START';
+        if (startedReturning) {
+          if (inStartBand) {
+            this.repCount++;
+            this.state = 'REP_COMPLETED';
+            this.cycleStartTime = null;
+            this.targetEntryTime = null;
+            formStatus = 'correct';
+            feedbackCode = this.repCount >= repGoal ? 'EXERCISE_COMPLETE' : 'TARGET_REACHED';
+          } else {
+            this.state = 'RETURNING';
+            formStatus = 'neutral';
+            feedbackCode = 'RETURN_TO_START';
+          }
+        } else if (inTargetBand) {
+          formStatus = 'correct';
+          this.correctFrames++;
+          feedbackCode = 'TARGET_REACHED';
+        } else {
+          // Overshot past target away from start
+          formStatus = 'incorrect';
+          feedbackCode = 'FORM_OUT_OF_RANGE';
         }
         break;
       }
 
       case 'RETURNING': {
-        formStatus = 'neutral';
-        feedbackCode = 'RETURN_TO_START';
-
-        // User must successfully re-enter the starting range to complete the rep
         if (inStartBand) {
           this.repCount++;
           this.state = 'REP_COMPLETED';
-          feedbackCode = this.repCount >= repGoal ? 'EXERCISE_COMPLETE' : 'MOVE_TOWARD_TARGET';
-
-          // Reset cycle trackers
           this.cycleStartTime = null;
           this.targetEntryTime = null;
-
-          // If session goal not yet reached, seamlessly transition back to WAITING_FOR_START
-          if (this.repCount < repGoal) {
-            this.state = 'WAITING_FOR_START';
-          }
+          formStatus = 'correct';
+          feedbackCode = this.repCount >= repGoal ? 'EXERCISE_COMPLETE' : 'TARGET_REACHED';
         } else if (inTargetBand) {
-          // User reversed direction back into target
           this.state = 'TARGET_REACHED';
           formStatus = 'correct';
           feedbackCode = 'TARGET_REACHED';
+        } else if (inBetweenCorridor) {
+          formStatus = 'neutral';
+          feedbackCode = 'RETURN_TO_START';
+        } else {
+          formStatus = 'incorrect';
+          feedbackCode = 'FORM_OUT_OF_RANGE';
         }
         break;
       }
 
       case 'REP_COMPLETED': {
         formStatus = 'correct';
-        feedbackCode = this.repCount >= repGoal ? 'EXERCISE_COMPLETE' : 'MOVE_TOWARD_TARGET';
-        if (this.repCount < repGoal && inStartBand) {
-          this.state = 'MOVING_TO_TARGET';
-        }
+        feedbackCode = 'EXERCISE_COMPLETE';
         break;
       }
 

@@ -60,9 +60,13 @@ export const TrackingSlot: React.FC = () => {
             </span>
           </div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
-            {language === 'en'
-              ? 'Computer Vision & Motion Intelligence'
-              : 'कंप्यूटर विज़न एवं मोशन इंटेलिजेंस'}
+            {activeTab === 'workbench'
+              ? language === 'en'
+                ? 'Motion Intelligence Workbench'
+                : 'मोशन इंटेलिजेंस वर्कबेंच'
+              : language === 'en'
+              ? 'Camera Setup & Real-Time Pose Detection'
+              : 'कैमरा सेटअप एवं रियल-टाइम पोज़ डिटेक्शन'}
           </h2>
         </div>
 
@@ -120,6 +124,7 @@ export const TrackingSlot: React.FC = () => {
             <PoseTrackingSurface
               stream={stream}
               cameraState={cameraState}
+              t={t}
               isMirrored={isMirrored}
               onToggleMirror={handleToggleMirror}
             />

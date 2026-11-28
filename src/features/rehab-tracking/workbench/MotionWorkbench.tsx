@@ -15,7 +15,8 @@ import {
   TrackingSnapshot,
 } from '../types';
 import { RepStateMachine } from '../services/repStateMachine';
-import { poseService, MappedRehabilitationJoints } from '../../pose/services/poseService';
+import { ControllerTelemetryUpdate } from '../services/rehabTrackingController';
+import { PoseDelegate, MappedRehabilitationJoints } from '../../pose/services/poseService';
 import { CLINICAL_VISIBILITY_THRESHOLD } from '../../../types/pose';
 import { LocalizedStrings } from '../../../types/i18n';
 import { en } from '../../../locales/en';
@@ -65,11 +66,19 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
     setResolutionPreset,
   } = useCamera();
 
-  // 2. Active Exercise Definition & Arm Selection
+  // 2. Active Exercise Definition, Mirror & Delegate Selection
   const [selectedExerciseId, setSelectedExerciseId] = useState<string>(
     ELBOW_FLEXION_EXTENSION_REP.id
   );
   const [selectedSide, setSelectedSide] = useState<'left' | 'right'>('left');
+  const [isMirrored, setIsMirrored] = useState<boolean>(true);
+  const [preferredDelegate, setPreferredDelegate] = useState<PoseDelegate>(() => {
+    if (typeof window !== 'undefined') {
+      const param = new URLSearchParams(window.location.search).get('delegate');
+      if (param?.toUpperCase() === 'CPU') return 'CPU';
+    }
+    return 'GPU';
+  });
 
   const baseDefinition = useMemo(() => {
     const found = EXERCISE_CATALOG.find((ex: ExerciseDefinition) => ex.id === selectedExerciseId);
@@ -117,72 +126,60 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
   const [simulatedAngle, setSimulatedAngle] = useState<number>(160);
   const [simulatedConfidence, setSimulatedConfidence] = useState<number>(0.92);
 
-  // Handle frame processed by the tracking surface
-  const handleFrameProcessed = useCallback(
-    (data: {
-      angleDeg: number | null;
-      formStatus: FormStatus;
-      feedbackCode: FeedbackCode | null;
-      confidence: number | null;
-    }) => {
-      if (simulationActive) return; // Ignore camera feed if simulation sandbox is active
-
-      const detection = poseService.getLatestDetection();
-      if (detection) {
-        setCameraFps(detection.cameraFps);
-        setInferenceFps(detection.inferenceFps);
-        setAvgLatency(detection.avgInferenceTimeMs);
-        setP95Latency(detection.p95InferenceTimeMs);
-        if (detection.mappedJoints) {
-          setMappedJoints(detection.mappedJoints);
-        }
-      }
-
-      setCurrentAngle(data.angleDeg);
-
-      // Step state machine
-      const sm = stateMachineRef.current;
-      const snapshot: TrackingSnapshot = sm.update({
-        angleDeg: data.angleDeg,
-        confidence: data.confidence,
-        isReliable: data.confidence !== null && data.confidence >= CLINICAL_VISIBILITY_THRESHOLD,
-        isPersonVisible: data.angleDeg !== null,
-        missingLandmarks:
-          data.confidence === null || data.confidence < CLINICAL_VISIBILITY_THRESHOLD
-            ? ['elbow', 'wrist']
-            : [],
-        now: performance.now(),
-      });
-
+  // Handle throttled TrackingSnapshot from controller (single source of truth when camera is active)
+  const handleLiveSnapshot = useCallback(
+    (snapshot: TrackingSnapshot) => {
+      if (simulationActive) return;
+      setCurrentAngle(snapshot.angleDeg);
       setFormStatus(snapshot.formStatus);
       setMovementPhase(snapshot.phase);
       setRepCount(snapshot.repCount);
       setHoldElapsedMs(snapshot.holdElapsedMs);
       setHoldComplete(snapshot.holdComplete);
-      setFeedbackCode(snapshot.feedbackCode as FeedbackCode | null);
+      setFeedbackCode((snapshot.feedbackCode as FeedbackCode | null) ?? null);
     },
     [simulationActive]
   );
 
-  // Simulation step function
+  const handleTelemetryUpdate = useCallback(
+    (tel: ControllerTelemetryUpdate) => {
+      if (simulationActive) return;
+      setCameraFps(tel.cameraFps);
+      setInferenceFps(tel.inferenceFps);
+      setAvgLatency(tel.avgLatencyMs);
+      setP95Latency(tel.p95LatencyMs);
+      if (tel.mappedJoints) {
+        setMappedJoints(tel.mappedJoints);
+      }
+    },
+    [simulationActive]
+  );
+
+  // Simulation step function (DEMO / MOCK offline test mode only)
   const runSimulationStep = useCallback(
     (angle: number, conf: number) => {
       setSimulatedAngle(angle);
       setSimulatedConfidence(conf);
 
       const sm = stateMachineRef.current;
+      const isPersonVisible = conf > 0;
       const isReliable = conf >= CLINICAL_VISIBILITY_THRESHOLD;
 
       const snapshot = sm.update({
-        angleDeg: angle,
+        angleDeg: isPersonVisible ? angle : null,
         confidence: conf,
         isReliable,
-        isPersonVisible: true,
-        missingLandmarks: isReliable ? [] : ['elbow', 'wrist'],
+        isPersonVisible,
+        missingLandmarks: isPersonVisible
+          ? isReliable
+            ? []
+            : [activeDefinition.angle.vertex, activeDefinition.angle.distal]
+          : ['person'],
         now: performance.now(),
+        skipJumpGuard: true,
       });
 
-      setCurrentAngle(angle);
+      setCurrentAngle(snapshot.angleDeg);
       setFormStatus(snapshot.formStatus);
       setMovementPhase(snapshot.phase);
       setRepCount(snapshot.repCount);
@@ -190,7 +187,7 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
       setHoldComplete(snapshot.holdComplete);
       setFeedbackCode(snapshot.feedbackCode as FeedbackCode | null);
     },
-    []
+    [activeDefinition.angle.distal, activeDefinition.angle.vertex]
   );
 
   const handleResetStateMachine = () => {
@@ -416,7 +413,12 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
               stream={stream}
               cameraState={cameraState}
               definition={activeDefinition}
-              onFrameProcessed={handleFrameProcessed}
+              t={t}
+              isMirrored={isMirrored}
+              onToggleMirror={() => setIsMirrored((prev) => !prev)}
+              preferredDelegate={preferredDelegate}
+              onSnapshotUpdate={handleLiveSnapshot}
+              onTelemetryUpdate={handleTelemetryUpdate}
             />
           </div>
 
@@ -425,7 +427,7 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
             cameraState={cameraState}
             devices={devices}
             activeDeviceId={activeDeviceId}
-            isMirrored={true}
+            isMirrored={isMirrored}
             resolutionPreset={resolutionPreset}
             actualResolution={actualResolution}
             t={t}
@@ -433,7 +435,7 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
             onStop={stopCamera}
             onRestart={restartCamera}
             onSwitchDevice={switchCamera}
-            onToggleMirror={() => {}}
+            onToggleMirror={() => setIsMirrored((prev) => !prev)}
             onSelectPreset={setResolutionPreset}
           />
         </div>
@@ -454,10 +456,14 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+                <label
+                  htmlFor="workbench-exercise-select"
+                  className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1"
+                >
                   Exercise Presets
                 </label>
                 <select
+                  id="workbench-exercise-select"
                   value={selectedExerciseId}
                   onChange={(e) => {
                     setSelectedExerciseId(e.target.value);
@@ -472,31 +478,57 @@ export const MotionWorkbench: React.FC<MotionWorkbenchProps> = ({ t = en }) => {
 
               <div>
                 <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
-                  Active Arm
+                  Active Arm & Delegate
                 </label>
-                <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSide('left')}
-                    className={`py-1 text-xs font-semibold rounded-lg transition ${
-                      selectedSide === 'left'
-                        ? 'bg-brand-600 text-white shadow'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Left
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSide('right')}
-                    className={`py-1 text-xs font-semibold rounded-lg transition ${
-                      selectedSide === 'right'
-                        ? 'bg-brand-600 text-white shadow'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    Right
-                  </button>
+                <div className="flex flex-col gap-1.5">
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSide('left')}
+                      className={`py-1 text-xs font-semibold rounded-lg transition ${
+                        selectedSide === 'left'
+                          ? 'bg-brand-600 text-white shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Left
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSide('right')}
+                      className={`py-1 text-xs font-semibold rounded-lg transition ${
+                        selectedSide === 'right'
+                          ? 'bg-brand-600 text-white shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Right
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setPreferredDelegate('GPU')}
+                      className={`py-1 text-[11px] font-mono font-semibold rounded-lg transition ${
+                        preferredDelegate === 'GPU'
+                          ? 'bg-emerald-600/80 text-white shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      GPU (Auto)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreferredDelegate('CPU')}
+                      className={`py-1 text-[11px] font-mono font-semibold rounded-lg transition ${
+                        preferredDelegate === 'CPU'
+                          ? 'bg-amber-600/80 text-white shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Force CPU
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

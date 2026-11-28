@@ -7,6 +7,7 @@ export interface SkeletonDrawerOptions {
   formStatus?: FormStatus | string;
   angleDeg?: number | null;
   side?: 'left' | 'right';
+  activeTripletIndices?: [number, number, number];
   showAngleBadge?: boolean;
   showAngleArc?: boolean;
   highlightArm?: boolean;
@@ -106,6 +107,7 @@ export function drawSkeleton(
     formStatus = 'neutral',
     angleDeg = null,
     side = 'left',
+    activeTripletIndices,
     showAngleBadge = true,
     showAngleArc = true,
     highlightArm = true,
@@ -137,10 +139,16 @@ export function drawSkeleton(
     };
   };
 
-  // Determine active arm landmarks based on side
-  const shoulderIndex = side === 'right' ? POSE_LANDMARKS.RIGHT_SHOULDER : POSE_LANDMARKS.LEFT_SHOULDER;
-  const elbowIndex = side === 'right' ? POSE_LANDMARKS.RIGHT_ELBOW : POSE_LANDMARKS.LEFT_ELBOW;
-  const wristIndex = side === 'right' ? POSE_LANDMARKS.RIGHT_WRIST : POSE_LANDMARKS.LEFT_WRIST;
+  // Determine active joint triplet (configured triplet or default elbow side)
+  const shoulderIndex =
+    activeTripletIndices?.[0] ??
+    (side === 'right' ? POSE_LANDMARKS.RIGHT_SHOULDER : POSE_LANDMARKS.LEFT_SHOULDER);
+  const elbowIndex =
+    activeTripletIndices?.[1] ??
+    (side === 'right' ? POSE_LANDMARKS.RIGHT_ELBOW : POSE_LANDMARKS.LEFT_ELBOW);
+  const wristIndex =
+    activeTripletIndices?.[2] ??
+    (side === 'right' ? POSE_LANDMARKS.RIGHT_WRIST : POSE_LANDMARKS.LEFT_WRIST);
 
   const isArmBone = (idxA: number, idxB: number): boolean => {
     return (

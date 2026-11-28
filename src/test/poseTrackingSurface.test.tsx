@@ -4,7 +4,7 @@ import { PoseTrackingSurface } from '../features/rehab-tracking/components/PoseT
 import { poseService } from '../features/pose/services/poseService';
 import { POSE_LANDMARKS } from '../types/pose';
 
-describe('PoseTrackingSurface Canvas Resizing & Mirroring', () => {
+describe('PoseTrackingSurface Canvas Resizing, Mirroring & Unified Controller Integration', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -39,9 +39,9 @@ describe('PoseTrackingSurface Canvas Resizing & Mirroring', () => {
     expect(video.className).not.toContain('scale-x-[-1]');
   });
 
-  it('resizes overlay canvas dynamically when videoWidth and videoHeight change', async () => {
+  it('resizes overlay canvas dynamically via RehabTrackingControllerImpl and emits neutral (not incorrect) transit feedback', async () => {
     vi.spyOn(poseService, 'initialize').mockResolvedValue({} as never);
-    vi.spyOn(poseService, 'getActiveDelegate').mockReturnValue('CPU');
+    vi.spyOn(poseService, 'getActiveDelegate').mockReturnValue('GPU');
     vi.spyOn(poseService, 'close').mockImplementation(() => {});
 
     const landmarks = Array.from({ length: 33 }, () => ({
@@ -50,9 +50,15 @@ describe('PoseTrackingSurface Canvas Resizing & Mirroring', () => {
       z: 0,
       visibility: 0.9,
     }));
-    landmarks[POSE_LANDMARKS.LEFT_SHOULDER] = { x: 0.3, y: 0.3, z: 0, visibility: 0.9 };
+    // 115° intermediate flexion (between start [145,180] and target [50,75])
+    landmarks[POSE_LANDMARKS.LEFT_SHOULDER] = { x: 0.3, y: 0.5, z: 0, visibility: 0.9 };
     landmarks[POSE_LANDMARKS.LEFT_ELBOW] = { x: 0.5, y: 0.5, z: 0, visibility: 0.9 };
-    landmarks[POSE_LANDMARKS.LEFT_WRIST] = { x: 0.5, y: 0.2, z: 0, visibility: 0.9 };
+    landmarks[POSE_LANDMARKS.LEFT_WRIST] = {
+      x: 0.5 + 0.1 * Math.cos((65 * Math.PI) / 180),
+      y: 0.5 - 0.1 * Math.sin((65 * Math.PI) / 180),
+      z: 0,
+      visibility: 0.9,
+    };
 
     vi.spyOn(poseService, 'detectVideoFrame').mockReturnValue({
       landmarks,
@@ -65,7 +71,7 @@ describe('PoseTrackingSurface Canvas Resizing & Mirroring', () => {
       p95InferenceTimeMs: 12,
       inferenceFps: 30,
       cameraFps: 30,
-      activeDelegate: 'CPU',
+      activeDelegate: 'GPU',
     });
 
     const rafCallbacks: FrameRequestCallback[] = [];
@@ -75,15 +81,20 @@ describe('PoseTrackingSurface Canvas Resizing & Mirroring', () => {
     });
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
 
+    const snapshots: Array<{ formStatus: string; feedbackCode: string | null }> = [];
+
     const { container } = render(
       <PoseTrackingSurface
         stream={{} as MediaStream}
         cameraState="active"
+        onSnapshotUpdate={(snap) =>
+          snapshots.push({ formStatus: snap.formStatus, feedbackCode: snap.feedbackCode })
+        }
       />
     );
 
-    // Wait for async poseService.initialize() promise microtask
     await act(async () => {
+      await Promise.resolve();
       await Promise.resolve();
     });
 
@@ -104,8 +115,10 @@ describe('PoseTrackingSurface Canvas Resizing & Mirroring', () => {
     });
     expect(canvas.width).toBe(640);
     expect(canvas.height).toBe(480);
+    // Intermediate angle must be neutral (RETURN_TO_START / MOVE_TOWARD_TARGET), NEVER red 'incorrect'
+    const lastSnap = snapshots[snapshots.length - 1];
+    expect(lastSnap?.formStatus).toBe('neutral');
 
-    // Simulate stream aspect ratio / resolution switch
     vWidth = 1280;
     vHeight = 720;
     act(() => {

@@ -14,8 +14,11 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
     await expect(page.getByText('Setup Checklist for Best Results')).toBeVisible();
     await expect(page.getByText('Distance: 1.5 to 2 meters')).toBeVisible();
 
-    // Capture initial desktop screenshot
-    await page.screenshot({ path: path.join('e2e', 'screenshots', 'desktop-initial.png'), fullPage: true });
+    // Capture initial screenshot scoped by project under gitignored test-results/
+    await page.screenshot({
+      path: path.join('test-results', 'screenshots', testInfo.project.name, 'desktop-layout-initial.png'),
+      fullPage: true,
+    });
 
     // 3. Test Language Toggle to Hindi and back
     await page.getByRole('button', { name: 'हिंदी में बदलें' }).click();
@@ -38,15 +41,18 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
     // Wait a brief moment for camera video element to receive stream
     await page.waitForTimeout(2000);
 
-    // Capture active camera desktop screenshot
-    await page.screenshot({ path: path.join('e2e', 'screenshots', 'desktop-camera-active.png'), fullPage: true });
+    // Capture active camera screenshot scoped by project under gitignored test-results/
+    await page.screenshot({
+      path: path.join('test-results', 'screenshots', testInfo.project.name, 'desktop-layout-camera-active.png'),
+      fullPage: true,
+    });
 
     // 6. Test Stop Camera
     await stopButton.click();
     await expect(startButton).toBeVisible();
   });
 
-  test('Mobile layout: responsive scaling and touch targets', async ({ page }) => {
+  test('Mobile layout: responsive scaling and touch targets', async ({ page }, testInfo) => {
     await page.goto('/');
 
     // Verify brand on mobile
@@ -63,15 +69,21 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
       expect(box.height).toBeGreaterThanOrEqual(48);
     }
 
-    // Capture mobile viewport screenshot
-    await page.screenshot({ path: path.join('e2e', 'screenshots', 'mobile-initial.png'), fullPage: true });
+    // Capture mobile viewport screenshot scoped by project under gitignored test-results/
+    await page.screenshot({
+      path: path.join('test-results', 'screenshots', testInfo.project.name, 'mobile-layout-initial.png'),
+      fullPage: true,
+    });
 
     // Test camera activation on mobile
     await startButton.click();
     await expect(page.getByRole('button', { name: 'Stop Camera' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(2000);
 
-    await page.screenshot({ path: path.join('e2e', 'screenshots', 'mobile-camera-active.png'), fullPage: true });
+    await page.screenshot({
+      path: path.join('test-results', 'screenshots', testInfo.project.name, 'mobile-layout-camera-active.png'),
+      fullPage: true,
+    });
   });
 
   test('Privacy & CPU fallback: loads WASM/model locally with zero external requests and runs CPU delegate', async ({ page }) => {
@@ -120,8 +132,8 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
     });
 
     await page.goto('/workbench');
-    await expect(page.getByText('Motion Intelligence Workbench')).toBeVisible();
-    await expect(page.getByText('Elbow Flexion-Extension (Rep)')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Motion Intelligence Workbench', exact: true })).toBeVisible();
+    await expect(page.getByLabel('Exercise Presets')).toHaveValue('elbow_flexion_extension_rep');
 
     // Activate Simulation Sandbox (explicitly labeled DEMO / MOCK)
     await page.getByRole('button', { name: /Enable Angle Simulator/i }).click();
@@ -135,5 +147,25 @@ test.describe('RehabBuddy Camera & Pose View Tests', () => {
     await page.getByRole('button', { name: 'Start (160°)' }).click();
 
     await expect(page.getByTestId('workbench-rep-count')).toContainText('1 / 10');
+  });
+
+  test('Offline runtime verification: pose tracking initializes and runs after setOffline(true)', async ({
+    page,
+    context,
+  }) => {
+    // 1. Initial load initializes WASM + pose model locally with CPU delegate
+    await page.goto('/?delegate=cpu');
+    await page.getByRole('button', { name: 'Start Camera' }).click();
+    await expect(page.getByTestId('pose-telemetry')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('pose-telemetry')).toContainText('CPU');
+    await page.getByRole('button', { name: 'Stop Camera' }).click();
+
+    // 2. Disable all browser network connectivity and verify restart runs offline
+    await context.setOffline(true);
+    await page.getByRole('button', { name: 'Start Camera' }).click();
+    await expect(page.getByTestId('pose-telemetry')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('pose-telemetry')).toContainText('CPU');
+    await expect(page.getByTestId('feedback-code-badge')).toContainText('PERSON_NOT_VISIBLE', { timeout: 10000 });
+    await page.getByRole('button', { name: 'Stop Camera' }).click();
   });
 });
