@@ -33,6 +33,14 @@ git checkout -b feature/<your-module>
 3. **Single canonical contracts**: Never duplicate `TrackingSnapshot`, `ExerciseDefinition`, or `PatientSessionRecord` inside feature folders—propose updates in `src/shared/contracts/` (see `docs/contracts/README.md`).
 4. **Never commit secrets**: Do not commit `.env`, `.env.local`, API keys, service role tokens, or patient data.
 
+### Person 3 Shared-File Integration Manifest (`fix/motion-engine-audit`)
+The following minimal edits outside `src/features/{camera,pose,rehab-tracking}` were required and are documented for Person 2's final integration:
+- `src/shared/contracts/app.ts` & `src/app/router/AppRouter.tsx`: Added `/workbench` (`APP_ROUTES.WORKBENCH`) route mapping to `TrackingSlot`.
+- `src/app/slots/TrackingSlot.tsx`: Added segmented tab toggle between the preserved Camera Setup View (`/`, `/tracking`) and Motion Intelligence Workbench (`/workbench`), passing `t` to `PoseTrackingSurface`.
+- `src/shared/contracts/motion.ts`: Finalized `v1.0.0` pure types/interfaces (zero imports from `src/features/*`).
+- `src/locales/{en,hi}.ts` & `src/types/i18n.ts`: Added `resumeCamera`, `cameraInterruptedTitle/Msg`, and `resolution*` strings used by `CameraControls` & `PoseTrackingSurface`.
+- `src/test/setup.ts`: Added JSDOM `roundRect`, `closePath`, `measureText`, and `fillText` canvas polyfills and `@testing-library/jest-dom/vitest` import.
+
 ---
 
 ## 3. Required Local Checks Before Opening a PR

@@ -138,7 +138,7 @@ describe('Motion Workbench & Rep/Hold Tracking Logic', () => {
       // Resumes holding
       holdSm.update({ angleDeg: 60, confidence: 0.95, isReliable: true, now: 3500 });
       const snap4 = holdSm.update({ angleDeg: 60, confidence: 0.95, isReliable: true, now: 5500 });
-      expect(snap4.holdElapsedMs).toBeGreaterThanOrEqual(3000);
+      expect(snap4.holdElapsedMs).toBe(3000);
       expect(snap4.holdComplete).toBe(true);
       expect(snap4.feedbackCode).toBe('EXERCISE_COMPLETE');
     });

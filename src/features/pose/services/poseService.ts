@@ -46,6 +46,8 @@ export interface DetectFrameOutput {
   inferenceFps: number;
   cameraFps: number;
   activeDelegate: PoseDelegate | null;
+  warmupComplete?: boolean;
+  warmupDurationMs?: number;
 }
 
 export class PoseService {
@@ -56,7 +58,10 @@ export class PoseService {
   private lastLandmarks: NormalizedLandmark[] | null = null;
   private lastRawResult: PoseLandmarkerResult | null = null;
 
-  // Performance monitoring
+  // Performance monitoring (excludes initial cold-start shader/WASM warmup frames)
+  private readonly WARMUP_FRAMES = 5;
+  private warmupFramesRemaining = 5;
+  private warmupDurationMs = 0;
   private inferenceTimestamps: number[] = [];
   private cameraFrameTimestamps: number[] = [];
   private inferenceDurationsMs: number[] = [];
@@ -69,6 +74,7 @@ export class PoseService {
    */
   public async initialize(preferredDelegate: PoseDelegate = 'GPU'): Promise<PoseLandmarker> {
     if (this.landmarker && this.activeDelegate === preferredDelegate) {
+      this.resetMetrics();
       return this.landmarker;
     }
 
@@ -95,6 +101,8 @@ export class PoseService {
             modelAssetPath: LOCAL_MODEL_PATH,
             delegate,
           },
+          // Single-pose mode (`numPoses: 1`) tracks MediaPipe's primary subject;
+          // multi-person ambiguity gating is a documented hackathon limitation.
           runningMode: 'VIDEO',
           numPoses: 1,
           minPoseDetectionConfidence: 0.5,
@@ -118,6 +126,7 @@ export class PoseService {
         }
       }
 
+      this.resetMetrics();
       return this.landmarker;
     } catch (finalError) {
       console.error('Failed to initialize MediaPipe PoseLandmarker from local assets:', finalError);
@@ -219,13 +228,18 @@ export class PoseService {
     const inferenceTime = endTime - startTime;
 
     this.lastInferenceTimeMs = inferenceTime;
-    this.inferenceDurationsMs.push(inferenceTime);
-    if (this.inferenceDurationsMs.length > 120) {
-      this.inferenceDurationsMs.shift();
-    }
+    if (this.warmupFramesRemaining > 0) {
+      this.warmupFramesRemaining--;
+      this.warmupDurationMs += inferenceTime;
+    } else {
+      this.inferenceDurationsMs.push(inferenceTime);
+      if (this.inferenceDurationsMs.length > 120) {
+        this.inferenceDurationsMs.shift();
+      }
 
-    this.inferenceTimestamps.push(endTime);
-    this.inferenceTimestamps = this.inferenceTimestamps.filter((t) => endTime - t <= 1000);
+      this.inferenceTimestamps.push(endTime);
+      this.inferenceTimestamps = this.inferenceTimestamps.filter((t) => endTime - t <= 1000);
+    }
 
     const landmarks = result.landmarks && result.landmarks.length > 0 ? result.landmarks[0] : null;
     this.lastLandmarks = landmarks;
@@ -246,6 +260,8 @@ export class PoseService {
       inferenceFps: this.getInferenceFps(endTime),
       cameraFps: this.getCameraFps(endTime),
       activeDelegate: this.activeDelegate,
+      warmupComplete: this.warmupFramesRemaining === 0,
+      warmupDurationMs: Math.round(this.warmupDurationMs),
     };
     this.latestDetection = output;
     return output;
@@ -477,6 +493,17 @@ export class PoseService {
     return this.cameraFrameTimestamps.length;
   }
 
+  /** Resets rolling FPS/latency telemetry and warmup window. */
+  public resetMetrics(): void {
+    this.warmupFramesRemaining = this.WARMUP_FRAMES;
+    this.warmupDurationMs = 0;
+    this.inferenceTimestamps = [];
+    this.cameraFrameTimestamps = [];
+    this.inferenceDurationsMs = [];
+    this.lastInferenceTimeMs = 0;
+    this.latestDetection = null;
+  }
+
   public close(): void {
     if (this.landmarker) {
       try {
@@ -487,10 +514,7 @@ export class PoseService {
       this.landmarker = null;
     }
     this.activeDelegate = null;
-    this.inferenceTimestamps = [];
-    this.cameraFrameTimestamps = [];
-    this.inferenceDurationsMs = [];
-    this.lastInferenceTimeMs = 0;
+    this.resetMetrics();
     this.lastVideoTime = -1;
     this.lastLandmarks = null;
     this.lastRawResult = null;

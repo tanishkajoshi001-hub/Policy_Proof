@@ -152,8 +152,11 @@ Person 4 can mount `<PoseTrackingSurface>` directly inside patient views and con
 
 ---
 
-## 4. Clinical & Biomechanical Boundaries
+## 4. Clinical, Biomechanical & Runtime Limitations
 
+- **Contract Boundary (`v1.0.0`)**: `src/shared/contracts/motion.ts` exports pure TypeScript contracts only (`v1.0.0`, promoted from `v0.1.0-provisional`). Runtime exports (`createRehabTrackingController`, `PoseTrackingSurface`, `MotionWorkbench`) are imported strictly from `src/features/rehab-tracking`.
+- **Single-Subject Tracking (`numPoses: 1`)**: MediaPipe `PoseLandmarker` is configured with `numPoses: 1`, which tracks MediaPipe's single primary subject. Multi-person ambiguity gating (`> 1` person in frame) is a documented hackathon limitation.
+- **Warmup Exclusion**: The first 5 inference frames after model initialization are treated as cold-start shader/WASM warmup and excluded from rolling steady-state `avgInferenceTimeMs` / `p95InferenceTimeMs` telemetry (`resetMetrics()` resets the warmup window).
 - **Demo Thresholds (`demo_unvalidated`)**: Both included exercises (`elbow_flexion_extension_rep` and `elbow_isometric_hold`) carry `clinicianReviewStatus: 'demo_unvalidated'`. Sample values (`160°` start, `60°` target, `10°` tolerance, `3s` hold, `10` reps) are engineering placeholders and **not** medically approved rehabilitation limits.
 - **2D Image-Plane Limitation**: `angleAtVertex()` computes 2D planar joint angles scaled by video dimensions (`videoWidth × videoHeight`). Out-of-plane forearm rotation, perspective foreshortening, or camera skew will distort projected angles; patients should face the camera as guided in the setup checklist.
 - **Session Accuracy Metric**: `TrackingSessionResult.accuracyPercent` reflects observed session form accuracy (`correctFrames / evaluatedFrames * 100`, excluding `insufficient_data` frames; `null` if `evaluatedFrames === 0`), not clinical recovery progress.
@@ -164,13 +167,12 @@ Person 4 can mount `<PoseTrackingSurface>` directly inside patient views and con
 ## 5. Performance & Privacy Report (PRD Section 9.1 / Section 12)
 
 - **Module**: Motion Intelligence & Pose Tracking Engine
-- **Branch**: `feature/motion-engine`
+- **Branch**: `fix/motion-engine-audit` (replaces audit blockers from `feature/motion-engine`)
 - **Automated Verification Scope**:
-  - TypeScript strict check (`npm run typecheck`), ESLint (`npm run lint`), Vitest unit/integration suite (`npm run test`), and Vite production build (`npm run build`).
-  - Privacy & offline runtime verification: zero `MediaRecorder`, zero `fetch`/`XMLHttpRequest`/`WebSocket`/`sendBeacon` network calls during camera/pose/controller execution, `audio: false` enforced on `getUserMedia`, and external CDN fallback removed from `poseService.ts`.
+  - TypeScript strict check (`npm run typecheck`), ESLint (`npm run lint`), Vitest unit/adversarial/integration suite (`npm run test`), Playwright E2E tests (`desktop-chrome` & `mobile-chrome`), and Vite production build (`npm run build`).
+  - Privacy & offline runtime verification: zero `MediaRecorder`, zero `fetch`/`XMLHttpRequest`/`WebSocket`/`sendBeacon` calls during tracking, `audio: false` enforced on `getUserMedia`, external CDN fallback removed from `poseService.ts`, and `context.setOffline(true)` verified in Playwright for in-session camera restart after initial asset load (note: cold page reloads while offline require a Service Worker / PWA precache or persistent HTTP cache headers on `/wasm/` and `/models/`, not provided by `vite preview`).
   - Timestamped state-machine feedback latency verified `< 1ms` in JS evaluation after posture error injection (`< 1000ms` PRD FR5 threshold).
-- **Hardware Performance Protocol (Must Be Measured on Physical Hardware)**:
-  - Automated CI/headless suites use synthetic/mocked media streams and do **not** measure real GPU/CPU inference throughput on human anatomy.
-  - Before final clinical/demo sign-off, run `npm run build && npm run preview` on the target **laptop webcam** and **mid-range Android phone** (open `/workbench` in Chrome/Edge), perform a 15-second warm-up, and record:
-    - Hardware device, OS, browser, negotiated camera resolution, active MediaPipe delegate (`GPU` or `CPU`)
-    - Sustained **Pose Inference FPS** (target: `>= 15 FPS`), average & P95 inference latency (ms), and end-to-end camera-to-feedback visual latency (target: `< 1000 ms`).
+- **Physical Hardware Verification Status**:
+  - **Desktop Real Webcam (`GPU` & `CPU` delegates, steady-state FPS, P95 latency)**: **NOT VERIFIED** in automated headless CI (no physical webcam attached to sandbox).
+  - **Mid-Range Android Browser (`FR2 / PERF-01 >= 15 FPS`, `< 1s` end-to-end latency)**: **NOT VERIFIED** (no physical Android phone measured).
+  - **Measurement Protocol**: Run `npm run build && npm run preview` on target laptop webcam and mid-range Android phone, open `/workbench` (testing both `GPU (Auto)` and `Force CPU` buttons / `?delegate=cpu`), allow 5-frame warmup, and record exact hardware, OS, browser, resolution, Camera FPS, Pose FPS, Avg Latency, and P95 Latency.

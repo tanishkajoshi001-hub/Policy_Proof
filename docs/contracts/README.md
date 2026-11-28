@@ -39,3 +39,13 @@ All `v0.1` contracts are **provisional** until **Person 3** and **Person 4** val
 2. **Non-breaking additive validation**: Owner updates their contract file in `src/shared/contracts/` and increments JSDoc version note.
 3. **Breaking cross-module change**: Open a small contract-change note in the PR description tagging the consuming module owner (`Person 3`, `Person 4`, or `Person 2`) before merging.
 4. **Contract Freeze**: **Person 2** freezes the final `v1.0` contracts during final integration (`feature/backend-doctor-release`).
+
+---
+
+## 4. Contract Change Note — `motion.ts` Promoted to `v1.0.0` (Person 3 PRD Section 8.1)
+
+- **Owner**: **Person 3** (`feature/motion-engine`)
+- **Affected Consumers**: **Person 4** (`feature/patient-experience`), **Person 2** (`feature/backend-doctor-release`)
+- **Summary of Changes**:
+  - `src/shared/contracts/motion.ts` finalized to `v1.0.0` per Person 3 PRD Page 9 (`ExerciseDefinition` with config-driven `angle` triplet and `clinicianReviewStatus: 'demo_unvalidated' | 'reviewed'`, `TrackingSnapshot` with `holdElapsedMs`/`holdGoalMs`/`holdComplete`/`feedbackCode`/`missingLandmarks`/`errorCode`, `TrackingSessionResult`, and `RehabTrackingController`).
+  - `src/shared/contracts/motion.ts` contains **types/interfaces only** (no reverse runtime imports from `src/features/*`). Person 4 imports runtime controller factories (`createRehabTrackingController`) and `PoseTrackingSurface` from `src/features/rehab-tracking`.

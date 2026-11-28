@@ -82,6 +82,7 @@ export interface ExerciseDefinition {
   targetEntryDwellMs: number;
   maxTrackingGapMs: number;
   maxCycleDurationMs?: number;
+  maxAngularVelocityDegPerSec?: number;
   clinicianReviewStatus: ClinicianReviewStatus;
 }
 
@@ -199,9 +200,3 @@ export interface RehabTrackingController {
   reset?(): void;
   getLatestSnapshot?(): TrackingSnapshot;
 }
-
-// Re-export controller implementation and factory from features/rehab-tracking
-export {
-  createRehabTrackingController,
-  RehabTrackingControllerImpl,
-} from '../../features/rehab-tracking/services/rehabTrackingController';

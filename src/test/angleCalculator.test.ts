@@ -3,8 +3,11 @@ import {
   angleAtVertex,
   clamp,
   calculateElbowAngle,
+  calculateJointAngle,
+  resolveConfiguredTriplet,
   EPSILON,
 } from '../features/rehab-tracking/utils/angleCalculator';
+import { POSE_LANDMARKS } from '../types/pose';
 
 describe('2D Image-Plane Joint Angle Calculator (angleAtVertex)', () => {
   const origin = { x: 0, y: 0 };
@@ -201,6 +204,42 @@ describe('2D Image-Plane Joint Angle Calculator (angleAtVertex)', () => {
       expect(result.formStatus).toBe('neutral');
       expect(result.isReliable).toBe(true);
       expect(result.angleDeg).toBe(90);
+    });
+
+    it('resolves non-elbow configured triplets (LEFT_HIP -> LEFT_KNEE -> LEFT_ANKLE) and respects minVisibility', () => {
+      const landmarks = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.9 }));
+      landmarks[POSE_LANDMARKS.LEFT_HIP] = { x: 0.5, y: 0.2, z: 0, visibility: 0.85 };
+      landmarks[POSE_LANDMARKS.LEFT_KNEE] = { x: 0.5, y: 0.5, z: 0, visibility: 0.85 };
+      landmarks[POSE_LANDMARKS.LEFT_ANKLE] = { x: 0.7, y: 0.5, z: 0, visibility: 0.72 };
+
+      const tripletOk = resolveConfiguredTriplet(
+        landmarks,
+        { proximal: 'LEFT_HIP', vertex: 'LEFT_KNEE', distal: 'LEFT_ANKLE' },
+        0.7,
+        'left'
+      );
+      expect(tripletOk.isReliable).toBe(true);
+      expect(tripletOk.tripletIndices).toEqual([23, 25, 27]);
+
+      const angleOk = calculateJointAngle(
+        tripletOk.proximal,
+        tripletOk.vertex,
+        tripletOk.distal,
+        { width: 1000, height: 1000 },
+        0.7
+      );
+      expect(angleOk.isReliable).toBe(true);
+      expect(angleOk.angleDeg).toBe(90);
+
+      // With stricter minVisibility=0.75, LEFT_ANKLE (0.72) must fail and report exact configured name
+      const tripletLow = resolveConfiguredTriplet(
+        landmarks,
+        { proximal: 'LEFT_HIP', vertex: 'LEFT_KNEE', distal: 'LEFT_ANKLE' },
+        0.75,
+        'left'
+      );
+      expect(tripletLow.isReliable).toBe(false);
+      expect(tripletLow.missingLandmarks).toEqual(['LEFT_ANKLE']);
     });
   });
 });
